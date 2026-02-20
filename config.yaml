@@ -1,0 +1,95 @@
+# ============================================================
+# TradeStation API Configuration
+# ============================================================
+
+# ----- Account Mode -----
+# Set to "sim" for Simulated account, "live" for Live account
+account_mode: "sim"
+
+# ----- API Credentials -----
+credentials:
+  client_id: "qdWl7XZlhJAgfGX5lXjsLKIYwJHIblSB"
+  client_secret: "t9ZmqD5bBQM4Gqk7lnoEDqxTqD0NM9_GvLyiIBa4-WhU0WnhP46YIhkVN822FlTT"
+  redirect_uri: "http://localhost:3000/callback"
+  refresh_token: "dksi0aBxm2QNWcsxB-XGBO5cRzFMtYiX2-u1KmjDgkxbi"
+
+
+# ----- Account IDs -----
+accounts:
+  sim: "SIM3170696M"    # Simulated account ID
+  live: "SIM3170696M"       # Live account ID
+
+# ----- API Endpoints -----
+endpoints:
+  auth_url: "https://signin.tradestation.com/authorize"
+  token_url: "https://signin.tradestation.com/oauth/token"
+  base_url:  "https://api.tradestation.com/v3"
+
+# ----- Streaming Configuration -----
+streaming:
+  symbol: "$SPX.X"          # SPX index symbol on TradeStation
+  bar_unit: "Minute"         # Minute | Daily | Weekly | Monthly
+  bar_interval: 5            # 5-minute candles
+  # ⚠ bars_back must be > rsi.period + 1 so RSI warms up on historical bars
+  # Recommended: at least rsi.period * 3 (e.g. 30 for period=9)
+  bars_back: 50
+  session_template: "Default"  # Default | USEQPre | USEQPost | USEQ24Hour
+
+# ----- Token Storage -----
+token:
+  storage_path: "./ts_token.json"
+
+# ----- Logging -----
+logging:
+  level: "DEBUG"             # DEBUG | INFO | WARNING | ERROR
+  log_to_file: true
+  log_file: "./spx_stream.log"
+  max_bytes: 5242880         # 5 MB
+  backup_count: 3
+
+# ----- Reconnection -----
+reconnection:
+  enabled: true
+  max_retries: 10
+  retry_delay_seconds: 5
+  max_delay_seconds: 120
+
+# ============================================================
+# RSI Analysis Settings
+# ============================================================
+rsi:
+  # ── Core RSI ──────────────────────────────────────────────
+  period: 9                  # RSI lookback period (classic: 14, aggressive: 9)
+  overbought: 70.0           # Log zone label when RSI ≥ this
+  oversold: 30.0             # Log zone label when RSI ≤ this
+
+  # ── Plateau Detection ─────────────────────────────────────
+  # A plateau is called when (max_RSI - min_RSI) across the last
+  # `plateau_window` *closed* bars falls within `plateau_threshold`.
+  # Interpretation: RSI momentum has stalled → watch for breakout or reversal.
+  plateau_window: 4          # Number of consecutive closed bars to examine
+  plateau_threshold: 1.5     # Max RSI point range to qualify as a plateau
+
+  # ── Divergence Detection ──────────────────────────────────
+  # Compares the latest closed bar against the bar `divergence_lookback`
+  # positions back in the history buffer.
+  #
+  # Bearish: price High goes up  +  RSI goes down  → momentum fading
+  # Bullish: price Low  goes down  +  RSI goes up   → selling pressure fading
+  divergence_lookback: 10            # How many bars back to use as the reference pivot
+  divergence_min_price_move_pct: 0.1 # Min % move in High/Low to count as a new extreme
+  divergence_min_rsi_delta: 2.0      # RSI must diverge by at least this many points
+
+# ============================================================
+# 0DTE Credit Spread Settings
+# ============================================================
+spreads:
+  # ── Common ────────────────────────────────────────────────
+  underlying: "SPXW"                # SPXW for SPX Weeklys (0DTE)
+  max_delta: 10                     # Short leg must have delta < this (absolute)
+  max_premium: 0.60                 # Max net credit (ask of long − bid of short) to accept
+  widths: [5, 10, 20]              # Strike widths to scan (points)
+  quantity: 1                       # Number of contracts per spread
+  order_type: "Limit"              # Limit | Market
+  time_in_force: "Day"             # Day | GTC
+  dry_run: true                    # If true, log the order but do NOT actually place it
