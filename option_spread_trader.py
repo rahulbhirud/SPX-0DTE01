@@ -13,13 +13,111 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, List, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
+from urllib.parse import quote
 
 import requests
 
 if TYPE_CHECKING:
     from spx_stream import Config, TokenManager
+
+
+# ══════════════════════════════════════════════════════════════
+# US Market Holiday Calendar
+# ══════════════════════════════════════════════════════════════
+
+def _us_market_holidays(year: int) -> Set[date]:
+    """
+    Return the set of dates the US stock market (NYSE/CBOE) is closed
+    for the given *year*.  Covers all standard market holidays.
+
+    Rules follow NYSE/CBOE observed-holiday conventions:
+      • If a holiday falls on Saturday → observed Friday.
+      • If a holiday falls on Sunday  → observed Monday.
+      • Some holidays use "nth weekday of month" (e.g. MLK, Presidents' Day,
+        Labor Day, Thanksgiving).
+    """
+
+    def _nth_weekday(y: int, month: int, weekday: int, n: int) -> date:
+        """Return the *n*-th occurrence of *weekday* (0=Mon) in *month*."""
+        first = date(y, month, 1)
+        # days until first occurrence of weekday in the month
+        offset = (weekday - first.weekday()) % 7
+        return first + timedelta(days=offset + 7 * (n - 1))
+
+    def _observed(d: date) -> date:
+        """Shift Sat→Fri, Sun→Mon (standard observed rule)."""
+        if d.weekday() == 5:   # Saturday
+            return d - timedelta(days=1)
+        if d.weekday() == 6:   # Sunday
+            return d + timedelta(days=1)
+        return d
+
+    holidays: Set[date] = set()
+
+    # New Year's Day — Jan 1
+    holidays.add(_observed(date(year, 1, 1)))
+
+    # Martin Luther King Jr. Day — 3rd Monday in January
+    holidays.add(_nth_weekday(year, 1, 0, 3))   # 0 = Monday
+
+    # Presidents' Day — 3rd Monday in February
+    holidays.add(_nth_weekday(year, 2, 0, 3))
+
+    # Good Friday — 2 days before Easter Sunday
+    # Easter via the Anonymous Gregorian algorithm
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month_e = (h + l - 7 * m + 114) // 31
+    day_e   = ((h + l - 7 * m + 114) % 31) + 1
+    easter  = date(year, month_e, day_e)
+    holidays.add(easter - timedelta(days=2))  # Good Friday
+
+    # Memorial Day — last Monday in May
+    may31 = date(year, 5, 31)
+    holidays.add(may31 - timedelta(days=(may31.weekday()) % 7))  # last Mon
+
+    # Juneteenth — Jun 19 (observed since 2022)
+    if year >= 2022:
+        holidays.add(_observed(date(year, 6, 19)))
+
+    # Independence Day — Jul 4
+    holidays.add(_observed(date(year, 7, 4)))
+
+    # Labor Day — 1st Monday in September
+    holidays.add(_nth_weekday(year, 9, 0, 1))
+
+    # Thanksgiving — 4th Thursday in November
+    holidays.add(_nth_weekday(year, 11, 3, 4))  # 3 = Thursday
+
+    # Christmas Day — Dec 25
+    holidays.add(_observed(date(year, 12, 25)))
+
+    return holidays
+
+
+def next_trading_date() -> date:
+    """
+    Return the next date the US stock market is open (today if it's a
+    regular trading day, otherwise the next business day that is not a
+    weekend or market holiday).
+    """
+    today = datetime.now(timezone.utc).date()
+    d = today
+    # Pre-compute holidays for this year and potentially next year
+    holidays = _us_market_holidays(d.year) | _us_market_holidays(d.year + 1)
+    while True:
+        if d.weekday() < 5 and d not in holidays:  # Mon–Fri & not holiday
+            return d
+        d += timedelta(days=1)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -74,8 +172,14 @@ class OptionSpreadTrader:
         }
 
     def _today_expiration(self) -> str:
-        """Return today's date as YYYY-MM-DD for 0DTE filtering."""
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        """Return the next trading day as YYYY-MM-DD for 0DTE filtering.
+
+        If today is a regular trading day (Mon–Fri, not a market holiday),
+        returns today.  Otherwise returns the next open market date.
+        """
+        trading_day = next_trading_date()
+        self.log.info("Using expiration date: %s", trading_day.isoformat())
+        return trading_day.isoformat()
 
     def _fetch_option_chain(self, option_type: str) -> List[dict]:
         """
@@ -89,15 +193,17 @@ class OptionSpreadTrader:
         """
         expiration = self._today_expiration()
         underlying = self.cfg.spread_underlying
+        # URL-encode the symbol (handles $, . and other special chars)
+        encoded_underlying = quote(underlying, safe="")
         url = (
-            f"{self.cfg.base_url}/marketdata/options/chains/{underlying}"
+            f"{self.cfg.base_url}/marketdata/stream/options/chains/{encoded_underlying}"
             f"?expiration={expiration}"
             f"&optionType={option_type}"
             f"&strikeProximity=50"       # strikes within 50 pts of underlying
             f"&enableGreeks=true"
         )
-        self.log.info("Fetching %s option chain for %s exp=%s…",
-                       option_type, underlying, expiration)
+        self.log.info("Fetching %s option chain for %s exp=%s  url=%s",
+                       option_type, underlying, expiration, url)
 
         r = requests.get(url, headers=self._headers(), timeout=15)
         r.raise_for_status()

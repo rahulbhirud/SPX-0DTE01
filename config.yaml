@@ -23,9 +23,10 @@ accounts:
 endpoints:
   auth_url: "https://signin.tradestation.com/authorize"
   token_url: "https://signin.tradestation.com/oauth/token"
-  base_url:  "https://api.tradestation.com/v3"
+  base_url:  "https://sim-api.tradestation.com/v3"
 
 # ----- Streaming Configuration -----
+
 streaming:
   symbol: "$SPX.X"          # SPX index symbol on TradeStation
   bar_unit: "Minute"         # Minute | Daily | Weekly | Monthly
@@ -103,7 +104,7 @@ rsi:
 # ============================================================
 spreads:
   # ── Common ────────────────────────────────────────────────
-  underlying: "SPXW"                # SPXW for SPX Weeklys (0DTE)
+  underlying: "$SPXW.X"                 # Underlying symbol for option chain lookup (SPX index)
   max_delta: 10                     # Short leg must have delta < this (absolute)
   max_premium: 0.60                 # Max net credit (ask of long − bid of short) to accept
   widths: [5, 10, 20]              # Strike widths to scan (points)

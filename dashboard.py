@@ -13,12 +13,17 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import sys
 import threading
+import traceback
 import webbrowser
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
+
+# Lazy imports for spread trading (only needed when buttons are clicked)
+_trader = None  # singleton OptionSpreadTrader, initialised on first use
 
 app = Flask(__name__, template_folder="templates")
 
@@ -51,6 +56,67 @@ def index():
 def api_state():
     """JSON endpoint for AJAX polling."""
     return jsonify(_read_state())
+
+
+# ── Spread Trading Endpoints ──────────────────────────────────
+
+def _get_trader():
+    """Lazily create and cache the OptionSpreadTrader singleton."""
+    global _trader
+    if _trader is None:
+        from spx_stream import Config, TokenManager
+        from option_spread_trader import OptionSpreadTrader
+
+        cfg = Config()
+        logger = logging.getLogger("spx_stream")
+        if not logger.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setFormatter(logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(message)s"))
+            logger.addHandler(handler)
+            logger.setLevel(logging.DEBUG)
+        token_mgr = TokenManager(cfg, logger)
+        _trader = OptionSpreadTrader(cfg, token_mgr, logger)
+    return _trader
+
+
+@app.route("/api/open_call_spread", methods=["POST"])
+def api_open_call_spread():
+    """Open a bear-call credit spread based on current SPX price."""
+    try:
+        trader = _get_trader()
+        result = trader.open_credit_call_spread()
+        if result is None:
+            # dry-run or no candidates
+            state = _read_state()
+            return jsonify({
+                "ok": True,
+                "message": "Call credit spread scan complete (dry-run or no candidates).",
+                "price": state.get("price", "—"),
+            })
+        return jsonify({"ok": True, "message": "Call credit spread order placed.", "order": result})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/open_put_spread", methods=["POST"])
+def api_open_put_spread():
+    """Open a bull-put credit spread based on current SPX price."""
+    try:
+        trader = _get_trader()
+        result = trader.open_credit_put_spread()
+        if result is None:
+            state = _read_state()
+            return jsonify({
+                "ok": True,
+                "message": "Put credit spread scan complete (dry-run or no candidates).",
+                "price": state.get("price", "—"),
+            })
+        return jsonify({"ok": True, "message": "Put credit spread order placed.", "order": result})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 def main():
