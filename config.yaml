@@ -100,15 +100,17 @@ rsi:
   reversal_rsi_rise: 8.0     # Min RSI pts rise from recent trough (bullish)
 
 # ============================================================
-# 0DTE Credit Spread Settings
+# Options Chain Scheduler
 # ============================================================
-spreads:
-  # ── Common ────────────────────────────────────────────────
-  underlying: "$SPXW.X"                 # Underlying symbol for option chain lookup (SPX index)
-  max_delta: 10                     # Short leg must have delta < this (absolute)
-  max_premium: 0.60                 # Max net credit (ask of long − bid of short) to accept
-  widths: [5, 10, 20]              # Strike widths to scan (points)
-  quantity: 1                       # Number of contracts per spread
-  order_type: "Limit"              # Limit | Market
-  time_in_force: "Day"             # Day | GTC
-  dry_run: true                    # If true, log the order but do NOT actually place it
+# Streams the options chain every N seconds, identifies credit
+# spreads filtered by delta and premium, and saves candidates
+# to options_data_config.json.
+options_scheduler:
+  enabled: true
+  underlying: "$SPXW.X"         # Symbol for option-chain lookup
+  fetch_interval: 5              # Seconds between fetches
+  strike_proximity: 150         # Strikes around ATM to request
+  spread_widths: [5, 10, 15, 20, 30] # Vertical spread widths (points)
+  max_delta: 0.10                # Short leg must have |delta| < this (10 delta)
+  min_premium: 0.40              # Minimum net credit ($)
+  max_premium: 0.70              # Maximum net credit ($)

@@ -137,39 +137,39 @@ class Config:
     def rsi_oversold(self) -> float:
         return float(self._raw.get("rsi", {}).get("oversold", 30.0))
 
-    # ── Spread Trading ────────────────────────────────────────
+    # ── Options Chain Scheduler ───────────────────────────────
 
     @property
-    def spread_underlying(self) -> str:
-        return self._raw.get("spreads", {}).get("underlying", "SPXW")
+    def options_scheduler_enabled(self) -> bool:
+        return bool(self._raw.get("options_scheduler", {}).get("enabled", False))
 
     @property
-    def spread_max_delta(self) -> float:
-        return float(self._raw.get("spreads", {}).get("max_delta", 10))
+    def options_underlying(self) -> str:
+        return self._raw.get("options_scheduler", {}).get("underlying", "$SPXW.X")
 
     @property
-    def spread_max_premium(self) -> float:
-        return float(self._raw.get("spreads", {}).get("max_premium", 0.60))
+    def options_fetch_interval(self) -> int:
+        return int(self._raw.get("options_scheduler", {}).get("fetch_interval", 5))
 
     @property
-    def spread_widths(self) -> List[int]:
-        return list(self._raw.get("spreads", {}).get("widths", [5, 10, 20]))
+    def options_strike_proximity(self) -> int:
+        return int(self._raw.get("options_scheduler", {}).get("strike_proximity", 200))
 
     @property
-    def spread_quantity(self) -> int:
-        return int(self._raw.get("spreads", {}).get("quantity", 1))
+    def options_spread_widths(self) -> list:
+        return list(self._raw.get("options_scheduler", {}).get("spread_widths", [5, 10, 15, 20]))
 
     @property
-    def spread_order_type(self) -> str:
-        return self._raw.get("spreads", {}).get("order_type", "Limit")
+    def options_max_delta(self) -> float:
+        return float(self._raw.get("options_scheduler", {}).get("max_delta", 0.10))
 
     @property
-    def spread_time_in_force(self) -> str:
-        return self._raw.get("spreads", {}).get("time_in_force", "Day")
+    def options_min_premium(self) -> float:
+        return float(self._raw.get("options_scheduler", {}).get("min_premium", 0.40))
 
     @property
-    def spread_dry_run(self) -> bool:
-        return bool(self._raw.get("spreads", {}).get("dry_run", True))
+    def options_max_premium(self) -> float:
+        return float(self._raw.get("options_scheduler", {}).get("max_premium", 0.60))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -276,7 +276,7 @@ class TokenManager:
             "client_id":     self.cfg.client_id,
             "redirect_uri":  self.cfg.redirect_uri,
             "audience":      "https://api.tradestation.com",
-            "scope":         "openid profile email MarketData ReadAccount Trade Matrix OptionSpreads offline_access",
+            "scope":         "openid profile email MarketData ReadAccount Trade Matrix offline_access",
         }
         self.log.info("Starting OAuth authorization with scopes: %s", params["scope"])
         webbrowser.open(f"{self.cfg.auth_url}?{urlencode(params)}")
@@ -596,15 +596,12 @@ class SPXStreamer:
     _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard_state.json")
 
     def __init__(self, cfg: Config, token_mgr: TokenManager, logger: logging.Logger):
-        from option_spread_trader import OptionSpreadTrader
-
         self.cfg       = cfg
         self.token_mgr = token_mgr
         self.log       = logger
         self._running  = False
         self._response = None          # active streaming response (for clean shutdown)
         self._rsi      = RSIAnalyzer(cfg, logger)
-        self.spreads   = OptionSpreadTrader(cfg, token_mgr, logger)
         self._shutdown_event = threading.Event()  # For interruptible sleeps
 
     # ──────────────────────────────────────────────────────────
@@ -847,15 +844,29 @@ def main():
     log.info("📊 Dashboard started at http://localhost:%d", dashboard_port)
     threading.Timer(2.0, lambda: webbrowser.open(f"http://localhost:{dashboard_port}")).start()
 
+    # ── Start options-chain scheduler in a background thread ──
+    options_scheduler = None
+    if cfg.options_scheduler_enabled:
+        from options_chain_scheduler import OptionsChainScheduler
+        options_scheduler = OptionsChainScheduler(cfg, token_mgr, log)
+        options_scheduler.start()
+        log.info("📋 Options chain scheduler started (every %ds)", cfg.options_fetch_interval)
+    else:
+        log.info("Options chain scheduler is disabled in config.")
+
     shutdown_event = threading.Event()
     
     def _sigint(sig, frame):
         log.info("\n🛑 Shutdown signal received (SIGINT)...")
+        if options_scheduler:
+            options_scheduler.stop()
         streamer.stop()
         shutdown_event.set()
         
     def _sigterm(sig, frame):
         log.info("\n🛑 Shutdown signal received (SIGTERM)...")
+        if options_scheduler:
+            options_scheduler.stop()
         streamer.stop()
         shutdown_event.set()
     
