@@ -7,11 +7,6 @@ import logging
 
 cfg = MagicMock(spec=Config)
 cfg.rsi_period = 9
-cfg.rsi_plateau_window = 4
-cfg.rsi_plateau_threshold = 1.5
-cfg.rsi_divergence_lookback = 10
-cfg.rsi_divergence_min_price_move_pct = 0.1
-cfg.rsi_divergence_min_rsi_delta = 2.0
 cfg.rsi_overbought = 70.0
 cfg.rsi_oversold = 30.0
 
