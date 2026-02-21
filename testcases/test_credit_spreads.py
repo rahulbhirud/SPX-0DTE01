@@ -22,7 +22,8 @@ import pytest
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from spx_stream import Config, OptionSpreadTrader, SpreadCandidate, TokenManager
+from spx_stream import Config, TokenManager
+from option_spread_trader import OptionSpreadTrader, SpreadCandidate
 
 
 # ══════════════════════════════════════════════════════════════
