@@ -31,7 +31,7 @@ streaming:
   bar_unit: "Minute"         # Minute | Daily | Weekly | Monthly
   bar_interval: 5            # 5-minute candles
   # ⚠ bars_back must be > rsi.period + 1 so RSI warms up on historical bars
-  # Recommended: at least rsi.period * 3 (e.g. 30 for period=9)
+  # Recommended: at least rsi.period * 3 (e.g. 27 for period=9)
   bars_back: 50
   session_template: "Default"  # Default | USEQPre | USEQPost | USEQ24Hour
 
@@ -63,22 +63,40 @@ rsi:
   overbought: 70.0           # Log zone label when RSI ≥ this
   oversold: 30.0             # Log zone label when RSI ≤ this
 
+  # ── Zone Thresholds for Signal Gating ───────────────────────
+  # Plateau & divergence only fire when RSI is in an actionable zone.
+  # These are softer than overbought/oversold to catch signals early.
+  signal_zone_upper: 60.0    # Bearish signals require RSI ≥ this
+  signal_zone_lower: 40.0    # Bullish signals require RSI ≤ this
+
   # ── Plateau Detection ─────────────────────────────────────
   # A plateau is called when (max_RSI - min_RSI) across the last
   # `plateau_window` *closed* bars falls within `plateau_threshold`.
-  # Interpretation: RSI momentum has stalled → watch for breakout or reversal.
-  plateau_window: 4          # Number of consecutive closed bars to examine
-  plateau_threshold: 1.5     # Max RSI point range to qualify as a plateau
+  # Only fires when RSI is in an actionable zone (≥ upper or ≤ lower).
+  plateau_window: 3          # Number of consecutive closed bars to examine
+  plateau_threshold: 3.0     # Max RSI point range to qualify as a plateau
 
   # ── Divergence Detection ──────────────────────────────────
-  # Compares the latest closed bar against the bar `divergence_lookback`
-  # positions back in the history buffer.
+  # Scans a RANGE of lookback bars to find the best pivot (swing high/low)
+  # instead of checking only one fixed bar.  This catches divergences even
+  # if the swing happened 3, 5, or 10 bars ago.
   #
   # Bearish: price High goes up  +  RSI goes down  → momentum fading
   # Bullish: price Low  goes down  +  RSI goes up   → selling pressure fading
-  divergence_lookback: 10            # How many bars back to use as the reference pivot
-  divergence_min_price_move_pct: 0.1 # Min % move in High/Low to count as a new extreme
-  divergence_min_rsi_delta: 2.0      # RSI must diverge by at least this many points
+  divergence_lookback_min: 3         # Earliest bar to scan for a pivot
+  divergence_lookback_max: 10        # Latest bar to scan for a pivot
+  divergence_min_price_move_pct: 0.05 # Min % move in High/Low (halved for fast markets)
+  divergence_min_rsi_delta: 1.5      # RSI must diverge by at least this many points
+
+  # ── RSI Reversal (Momentum Shift) ────────────────────────
+  # Fires when RSI drops/rises sharply from an extreme zone within
+  # a few bars — catches fast reversals that divergence would miss.
+  #
+  # Example: RSI at 75 drops to 62 in 2 bars → BEARISH_REVERSAL
+  reversal_enabled: true
+  reversal_window: 3         # Max bars over which the RSI swing occurred
+  reversal_rsi_drop: 8.0     # Min RSI pts drop from recent peak (bearish)
+  reversal_rsi_rise: 8.0     # Min RSI pts rise from recent trough (bullish)
 
 # ============================================================
 # 0DTE Credit Spread Settings

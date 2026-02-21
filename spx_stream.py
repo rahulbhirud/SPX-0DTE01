@@ -22,6 +22,8 @@ import argparse
 import json
 import logging
 import logging.handlers
+import os
+import signal
 import sys
 import threading
 import time
@@ -66,6 +68,10 @@ class Config:
     @property
     def redirect_uri(self) -> str:
         return self._raw["credentials"]["redirect_uri"]
+
+    @property
+    def refresh_token(self) -> Optional[str]:
+        return self._raw["credentials"].get("refresh_token")
 
     @property
     def account_id(self) -> str:
@@ -136,19 +142,50 @@ class Config:
         return float(self._raw.get("rsi", {}).get("plateau_threshold", 1.5))
 
     @property
-    def rsi_divergence_lookback(self) -> int:
-        """How many bars back to compare for divergence."""
-        return int(self._raw.get("rsi", {}).get("divergence_lookback", 10))
+    def rsi_signal_zone_upper(self) -> float:
+        """Bearish signals require RSI >= this."""
+        return float(self._raw.get("rsi", {}).get("signal_zone_upper", 60.0))
+
+    @property
+    def rsi_signal_zone_lower(self) -> float:
+        """Bullish signals require RSI <= this."""
+        return float(self._raw.get("rsi", {}).get("signal_zone_lower", 40.0))
+
+    @property
+    def rsi_divergence_lookback_min(self) -> int:
+        """Earliest bar to scan for a divergence pivot."""
+        return int(self._raw.get("rsi", {}).get("divergence_lookback_min", 3))
+
+    @property
+    def rsi_divergence_lookback_max(self) -> int:
+        """Latest bar to scan for a divergence pivot."""
+        return int(self._raw.get("rsi", {}).get("divergence_lookback_max", 10))
 
     @property
     def rsi_divergence_min_price_move_pct(self) -> float:
         """Min % price move (high or low) to qualify a new extreme."""
-        return float(self._raw.get("rsi", {}).get("divergence_min_price_move_pct", 0.1))
+        return float(self._raw.get("rsi", {}).get("divergence_min_price_move_pct", 0.05))
 
     @property
     def rsi_divergence_min_rsi_delta(self) -> float:
         """RSI must diverge by at least this many points."""
-        return float(self._raw.get("rsi", {}).get("divergence_min_rsi_delta", 2.0))
+        return float(self._raw.get("rsi", {}).get("divergence_min_rsi_delta", 1.5))
+
+    @property
+    def rsi_reversal_enabled(self) -> bool:
+        return bool(self._raw.get("rsi", {}).get("reversal_enabled", True))
+
+    @property
+    def rsi_reversal_window(self) -> int:
+        return int(self._raw.get("rsi", {}).get("reversal_window", 3))
+
+    @property
+    def rsi_reversal_drop(self) -> float:
+        return float(self._raw.get("rsi", {}).get("reversal_rsi_drop", 8.0))
+
+    @property
+    def rsi_reversal_rise(self) -> float:
+        return float(self._raw.get("rsi", {}).get("reversal_rsi_rise", 8.0))
 
     @property
     def rsi_overbought(self) -> float:
@@ -202,7 +239,17 @@ def setup_logging(cfg: Config) -> logging.Logger:
     log = logging.getLogger("spx_stream")
     log.setLevel(getattr(logging, lc["level"].upper(), logging.INFO))
 
-    fmt = logging.Formatter(
+    import datetime, time as _time
+    class _ESTFormatter(logging.Formatter):
+        """Formatter that always logs in US/Eastern (EST/EDT)."""
+        _tz = datetime.timezone(datetime.timedelta(hours=-5), "EST")
+        def formatTime(self, record, datefmt=None):
+            dt = datetime.datetime.fromtimestamp(record.created, tz=self._tz)
+            if datefmt:
+                return dt.strftime(datefmt)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    fmt = _ESTFormatter(
         "%(asctime)s | %(levelname)-8s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
@@ -254,11 +301,16 @@ class TokenManager:
             self.log.info("Loaded saved token from %s", p)
             self.log.debug("Token keys: %s", list(self._token.keys()))
             if "refresh_token" in self._token:
-                self.log.debug("Refresh token found")
+                self.log.debug("Refresh token found in saved file")
             else:
                 self.log.warning("No refresh_token in saved token file!")
         else:
             self.log.info("No token file found at %s", p)
+        
+        # Use refresh token from config as fallback if not in saved token
+        if not self._token.get("refresh_token") and self.cfg.refresh_token:
+            self.log.info("Using refresh_token from config.yaml")
+            self._token["refresh_token"] = self.cfg.refresh_token
 
     def _save_token(self):
         with open(self.cfg.token_path, "w") as f:
@@ -362,8 +414,13 @@ class TokenManager:
             self.log.debug("Using existing valid token")
             return self._token["access_token"]
         
-        if self._token.get("refresh_token"):
+        # Check for refresh token in loaded token or config
+        refresh_token = self._token.get("refresh_token") or self.cfg.refresh_token
+        if refresh_token:
             self.log.info("Access token expired, attempting refresh...")
+            # Ensure refresh token is in our token dict for the refresh method
+            if not self._token.get("refresh_token"):
+                self._token["refresh_token"] = refresh_token
             try:
                 self._refresh()
                 self.log.info("Token refreshed successfully")
@@ -432,11 +489,18 @@ class RSIAnalyzer:
         self._period          = cfg.rsi_period
         self._plateau_window  = cfg.rsi_plateau_window
         self._plateau_thr     = cfg.rsi_plateau_threshold
-        self._div_lookback    = cfg.rsi_divergence_lookback
+        self._div_lb_min      = cfg.rsi_divergence_lookback_min
+        self._div_lb_max      = cfg.rsi_divergence_lookback_max
         self._min_price_move  = cfg.rsi_divergence_min_price_move_pct / 100.0
         self._min_rsi_delta   = cfg.rsi_divergence_min_rsi_delta
         self._overbought      = cfg.rsi_overbought
         self._oversold        = cfg.rsi_oversold
+        self._zone_upper      = cfg.rsi_signal_zone_upper
+        self._zone_lower      = cfg.rsi_signal_zone_lower
+        self._rev_enabled     = cfg.rsi_reversal_enabled
+        self._rev_window      = cfg.rsi_reversal_window
+        self._rev_drop        = cfg.rsi_reversal_drop
+        self._rev_rise        = cfg.rsi_reversal_rise
 
         # Wilder's state
         self._closes:   List[float]      = []   # bootstrap buffer
@@ -445,12 +509,19 @@ class RSIAnalyzer:
         self._rsi_ready                  = False
         self._last_close: Optional[float] = None
 
-        # Closed-bar history for plateau / divergence checks
-        max_hist = max(self._plateau_window, self._div_lookback) + 5
+        # Closed-bar history for plateau / divergence / reversal checks
+        max_hist = max(self._plateau_window, self._div_lb_max, self._rev_window) + 5
         self._history: Deque[BarSnapshot] = deque(maxlen=max_hist)
 
         # Current (live / open) bar tracking — for real-time RSI display
         self._live_close: Optional[float] = None
+
+        # Bar-close detection: buffer the open bar until timestamp changes
+        # TradeStation streaming does NOT send a Status field; all ticks
+        # arrive with an empty status.  We detect bar closes by watching
+        # for a new TimeStamp, which means the previous bar has closed.
+        self._current_bar_ts: Optional[str] = None
+        self._pending_bar: Optional[dict] = None  # last tick of the open bar
 
         # Dedup: avoid firing the same signal on consecutive bars
         self._last_plateau_bar: Optional[str] = None
@@ -464,32 +535,75 @@ class RSIAnalyzer:
         """
         Feed a raw candle packet from the stream.
         Returns any RSISignal events generated (may be empty).
+
+        Bar-close detection
+        ───────────────────
+        TradeStation streaming sends ticks with the *same* TimeStamp while
+        a bar is open.  A *new* TimeStamp means the previous bar has closed.
+        We buffer the open bar and only advance RSI state when a close is
+        confirmed (by timestamp change or explicit "closed"/"historical"
+        Status field).
         """
         ts     = candle.get("TimeStamp", "")
         close  = _safe_float(candle.get("Close"))
         high   = _safe_float(candle.get("High"))
         low    = _safe_float(candle.get("Low"))
-        status = candle.get("Status", "").lower()   # "historical"|"open"|"closed"
+        status = candle.get("Status", "").lower()
 
         if close is None or high is None or low is None:
             return []
 
         signals: List[RSISignal] = []
+        is_closed = status in ("closed", "historical")
 
-        if status in ("closed", "historical", ""):
-            # Finalise RSI for this bar
-            # Empty status covers historical backfill bars from TradeStation
+        # ── Detect implicit close: timestamp changed → previous bar closed ──
+        if (not is_closed
+                and self._current_bar_ts is not None
+                and ts != self._current_bar_ts):
+            signals += self._close_pending_bar()
+
+        # ── Explicitly closed / historical bar ───────────────────────────
+        if is_closed:
+            # Flush any buffered bar from a different timestamp first
+            if self._pending_bar is not None and self._current_bar_ts != ts:
+                signals += self._close_pending_bar()
+
             rsi_val = self._step_rsi(close)
             self._live_close = None
+            self._current_bar_ts = None
+            self._pending_bar = None
 
             if rsi_val is not None:
                 snap = BarSnapshot(ts, close, high, low, rsi_val)
                 self._history.append(snap)
                 signals += self._check_plateau(snap)
                 signals += self._check_divergence(snap)
+                signals += self._check_reversal(snap)
         else:
-            # Open / historical: keep live close for interim RSI display
+            # ── Open bar tick: buffer it, update live close for display ──
+            self._current_bar_ts = ts
+            self._pending_bar = {"ts": ts, "close": close, "high": high, "low": low}
             self._live_close = close
+
+        return signals
+
+    def _close_pending_bar(self) -> List[RSISignal]:
+        """Finalise the buffered open bar: advance RSI and run signal checks."""
+        signals: List[RSISignal] = []
+        if self._pending_bar is None:
+            return signals
+
+        bar = self._pending_bar
+        rsi_val = self._step_rsi(bar["close"])
+        self._live_close = None
+        self._pending_bar = None
+
+        if rsi_val is not None:
+            snap = BarSnapshot(bar["ts"], bar["close"], bar["high"], bar["low"], rsi_val)
+            self._history.append(snap)
+            signals += self._check_plateau(snap)
+            signals += self._check_divergence(snap)
+            signals += self._check_reversal(snap)
 
         return signals
 
@@ -566,6 +680,11 @@ class RSIAnalyzer:
         """
         Plateau = RSI high - RSI low across the last `plateau_window` bars
         is within `plateau_threshold`.
+
+        Only fires when the plateau is in an actionable zone:
+          • avg RSI ≥ signal_zone_upper → bearish stall
+          • avg RSI ≤ signal_zone_lower → bullish stall
+        Mid-range plateaus (RSI ~50) are ignored as noise.
         """
         if len(self._history) < self._plateau_window:
             return []
@@ -576,12 +695,19 @@ class RSIAnalyzer:
 
         if rsi_range > self._plateau_thr:
             return []
+
+        avg_rsi = sum(rsi_values) / len(rsi_values)
+
+        # Gate: only fire in actionable zones
+        if self._zone_lower < avg_rsi < self._zone_upper:
+            return []
+
         if self._last_plateau_bar == latest.timestamp:
             return []
         self._last_plateau_bar = latest.timestamp
 
-        avg_rsi = sum(rsi_values) / len(rsi_values)
-        zone    = self._zone_label(avg_rsi)
+        zone = self._zone_label(avg_rsi)
+        bias = "BEARISH" if avg_rsi >= self._zone_upper else "BULLISH"
 
         return [RSISignal(
             kind="PLATEAU",
@@ -589,8 +715,8 @@ class RSIAnalyzer:
             rsi_value=round(avg_rsi, 2),
             price=latest.close,
             detail=(
-                f"RSI range={rsi_range:.2f} pts over {self._plateau_window} bars "
-                f"(avg RSI={avg_rsi:.2f}) {zone}"
+                f"{bias} stall — RSI range={rsi_range:.2f} pts over "
+                f"{self._plateau_window} bars (avg RSI={avg_rsi:.2f}) {zone}"
             ),
         )]
 
@@ -600,24 +726,47 @@ class RSIAnalyzer:
 
     def _check_divergence(self, latest: BarSnapshot) -> List[RSISignal]:
         """
-        Compare latest bar vs. the reference bar `divergence_lookback` bars ago.
+        Scan a RANGE of lookback bars (div_lb_min .. div_lb_max) for the
+        best pivot, instead of checking only one fixed bar.
 
-        Bearish: price High > ref High  AND  RSI < ref RSI  (by min_rsi_delta)
-        Bullish: price Low  < ref Low   AND  RSI > ref RSI  (by min_rsi_delta)
+        Bearish: (RSI ≥ zone_upper)  price Higher-High + RSI Lower-High
+        Bullish: (RSI ≤ zone_lower)  price Lower-Low   + RSI Higher-Low
+
+        Picks the pivot with the largest RSI delta (strongest divergence).
         """
-        if len(self._history) < self._div_lookback:
+        if len(self._history) < self._div_lb_min + 1:
             return []
         if self._last_div_bar == latest.timestamp:
             return []
 
-        hist = list(self._history)
-        ref  = hist[-(self._div_lookback)]   # reference pivot bar
+        hist     = list(self._history)
+        max_back = min(self._div_lb_max, len(hist) - 1)
 
-        # ── Bearish ───────────────────────────────────────────
-        price_hh = latest.high > ref.high * (1 + self._min_price_move)
-        rsi_lh   = (ref.rsi - latest.rsi) >= self._min_rsi_delta
+        best_bearish: Optional[Tuple[BarSnapshot, float, int]] = None  # (ref, rsi_delta, bars_back)
+        best_bullish: Optional[Tuple[BarSnapshot, float, int]] = None
 
-        if price_hh and rsi_lh:
+        for offset in range(self._div_lb_min, max_back + 1):
+            ref = hist[-(offset + 1)]  # +1 because hist[-1] == latest
+
+            # ── Bearish scan (RSI should be in upper zone) ────
+            if latest.rsi >= self._zone_upper:
+                price_hh = latest.high > ref.high * (1 + self._min_price_move)
+                rsi_delta = ref.rsi - latest.rsi
+                if price_hh and rsi_delta >= self._min_rsi_delta:
+                    if best_bearish is None or rsi_delta > best_bearish[1]:
+                        best_bearish = (ref, rsi_delta, offset)
+
+            # ── Bullish scan (RSI should be in lower zone) ────
+            if latest.rsi <= self._zone_lower:
+                price_ll = latest.low < ref.low * (1 - self._min_price_move)
+                rsi_delta = latest.rsi - ref.rsi
+                if price_ll and rsi_delta >= self._min_rsi_delta:
+                    if best_bullish is None or rsi_delta > best_bullish[1]:
+                        best_bullish = (ref, rsi_delta, offset)
+
+        # ── Emit strongest bearish divergence found ───────────
+        if best_bearish:
+            ref, rd, bars = best_bearish
             self._last_div_bar = latest.timestamp
             return [RSISignal(
                 kind="BEARISH_DIVERGENCE",
@@ -628,16 +777,14 @@ class RSIAnalyzer:
                     f"High: {ref.high:.2f} → {latest.high:.2f} "
                     f"(+{(latest.high/ref.high - 1)*100:.2f}%)  |  "
                     f"RSI: {ref.rsi:.2f} → {latest.rsi:.2f} "
-                    f"(−{ref.rsi - latest.rsi:.2f} pts)  "
-                    f"over {self._div_lookback} bars"
+                    f"(−{rd:.2f} pts)  "
+                    f"over {bars} bars"
                 ),
             )]
 
-        # ── Bullish ───────────────────────────────────────────
-        price_ll = latest.low < ref.low * (1 - self._min_price_move)
-        rsi_hl   = (latest.rsi - ref.rsi) >= self._min_rsi_delta
-
-        if price_ll and rsi_hl:
+        # ── Emit strongest bullish divergence found ───────────
+        if best_bullish:
+            ref, rd, bars = best_bullish
             self._last_div_bar = latest.timestamp
             return [RSISignal(
                 kind="BULLISH_DIVERGENCE",
@@ -648,12 +795,68 @@ class RSIAnalyzer:
                     f"Low: {ref.low:.2f} → {latest.low:.2f} "
                     f"(−{(1 - latest.low/ref.low)*100:.2f}%)  |  "
                     f"RSI: {ref.rsi:.2f} → {latest.rsi:.2f} "
-                    f"(+{latest.rsi - ref.rsi:.2f} pts)  "
-                    f"over {self._div_lookback} bars"
+                    f"(+{rd:.2f} pts)  "
+                    f"over {bars} bars"
                 ),
             )]
 
         return []
+
+    # ──────────────────────────────────────────────────────────
+    # RSI Reversal (Momentum Shift) Detection
+    # ──────────────────────────────────────────────────────────
+
+    def _check_reversal(self, latest: BarSnapshot) -> List[RSISignal]:
+        """
+        Detect sharp RSI momentum shifts from extreme zones within a
+        small window.  Catches fast reversals that divergence would miss.
+
+        BEARISH_REVERSAL: RSI peak within the window was ≥ overbought,
+                          and has since dropped by ≥ reversal_drop pts.
+        BULLISH_REVERSAL: RSI trough within the window was ≤ oversold,
+                          and has since risen by ≥ reversal_rise pts.
+        """
+        if not self._rev_enabled:
+            return []
+        if len(self._history) < self._rev_window + 1:
+            return []
+
+        window = list(self._history)[-(self._rev_window + 1):]
+        rsi_vals = [b.rsi for b in window]
+        peak  = max(rsi_vals)
+        trough = min(rsi_vals)
+
+        signals: List[RSISignal] = []
+
+        # ── Bearish reversal: sharp drop from overbought ──────
+        if peak >= self._overbought and (peak - latest.rsi) >= self._rev_drop:
+            signals.append(RSISignal(
+                kind="BEARISH_REVERSAL",
+                timestamp=latest.timestamp,
+                rsi_value=latest.rsi,
+                price=latest.close,
+                detail=(
+                    f"RSI fell {peak:.2f} → {latest.rsi:.2f} "
+                    f"(−{peak - latest.rsi:.2f} pts) within "
+                    f"{self._rev_window} bars from OVERBOUGHT zone"
+                ),
+            ))
+
+        # ── Bullish reversal: sharp rise from oversold ────────
+        if trough <= self._oversold and (latest.rsi - trough) >= self._rev_rise:
+            signals.append(RSISignal(
+                kind="BULLISH_REVERSAL",
+                timestamp=latest.timestamp,
+                rsi_value=latest.rsi,
+                price=latest.close,
+                detail=(
+                    f"RSI rose {trough:.2f} → {latest.rsi:.2f} "
+                    f"(+{latest.rsi - trough:.2f} pts) within "
+                    f"{self._rev_window} bars from OVERSOLD zone"
+                ),
+            ))
+
+        return signals
 
     # ──────────────────────────────────────────────────────────
     # Utility
@@ -667,12 +870,16 @@ class RSIAnalyzer:
         return ""
 
     def rsi_status_str(self) -> str:
-        """One-liner for bar log — shows live RSI and zone tag."""
+        """One-liner for bar log — shows provisional RSI during open bar, confirmed on close."""
+        if not self._rsi_ready or not self._history:
+            rem = self.warmup_bars_remaining()
+            return f"RSI({self._period})=warming ({rem} bars left)"
+
+        # Provisional RSI while bar is open; confirmed once it closes
         rsi = self.current_rsi()
         if rsi is None:
-            rem = self.warmup_bars_remaining()
-            return f"RSI(9)=warming ({rem} bars left)"
-        return f"RSI(9)={rsi:6.2f}  {self._zone_label(rsi)}"
+            rsi = self._history[-1].rsi
+        return f"RSI({self._period})={rsi:6.2f}  {self._zone_label(rsi)}"
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1047,6 +1254,8 @@ class SPXStreamer:
     through the RSIAnalyzer for real-time RSI, plateau, and divergence logging.
     """
 
+    _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard_state.json")
+
     def __init__(self, cfg: Config, token_mgr: TokenManager, logger: logging.Logger):
         self.cfg       = cfg
         self.token_mgr = token_mgr
@@ -1056,6 +1265,7 @@ class SPXStreamer:
         self._rsi      = RSIAnalyzer(cfg, logger)
         self.spreads   = OptionSpreadTrader(cfg, token_mgr, logger)
         self._shutdown_event = threading.Event()  # For interruptible sleeps
+        self._reversal_signals: List[dict] = []   # For dashboard UI
 
     # ──────────────────────────────────────────────────────────
     # Candle handler
@@ -1080,6 +1290,9 @@ class SPXStreamer:
         for sig in signals:
             self._emit_signal(sig)
 
+        # ── Update dashboard state file ──────────────────────
+        self._write_dashboard_state(c, ts)
+
     # ──────────────────────────────────────────────────────────
     # Signal logger
     # ──────────────────────────────────────────────────────────
@@ -1092,8 +1305,8 @@ class SPXStreamer:
         if sig.kind == "PLATEAU":
             self.log.warning(B)
             self.log.warning(
-                "  📊  RSI PLATEAU  |  %s  |  RSI(9)=%.2f  |  Price=%.2f",
-                sig.timestamp, sig.rsi_value, sig.price,
+                "  📊  RSI PLATEAU  |  %s  |  RSI(%d)=%.2f  |  Price=%.2f",
+                sig.timestamp, self._rsi._period, sig.rsi_value, sig.price,
             )
             self.log.warning("  %s", sig.detail)
             self.log.warning(
@@ -1104,8 +1317,8 @@ class SPXStreamer:
         elif sig.kind == "BEARISH_DIVERGENCE":
             self.log.warning(B)
             self.log.warning(
-                "  🔻  BEARISH DIVERGENCE  |  %s  |  RSI(9)=%.2f  |  Price=%.2f",
-                sig.timestamp, sig.rsi_value, sig.price,
+                "  🔻  BEARISH DIVERGENCE  |  %s  |  RSI(%d)=%.2f  |  Price=%.2f",
+                sig.timestamp, self._rsi._period, sig.rsi_value, sig.price,
             )
             self.log.warning("  %s", sig.detail)
             self.log.warning(
@@ -1117,8 +1330,8 @@ class SPXStreamer:
         elif sig.kind == "BULLISH_DIVERGENCE":
             self.log.warning(B)
             self.log.warning(
-                "  🔺  BULLISH DIVERGENCE  |  %s  |  RSI(9)=%.2f  |  Price=%.2f",
-                sig.timestamp, sig.rsi_value, sig.price,
+                "  🔺  BULLISH DIVERGENCE  |  %s  |  RSI(%d)=%.2f  |  Price=%.2f",
+                sig.timestamp, self._rsi._period, sig.rsi_value, sig.price,
             )
             self.log.warning("  %s", sig.detail)
             self.log.warning(
@@ -1126,6 +1339,73 @@ class SPXStreamer:
                 "selling pressure is fading; potential bounce ahead."
             )
             self.log.warning(B)
+
+        elif sig.kind == "BEARISH_REVERSAL":
+            self.log.warning(B)
+            self.log.warning(
+                "  ⚡🔻  BEARISH REVERSAL  |  %s  |  RSI(%d)=%.2f  |  Price=%.2f",
+                sig.timestamp, self._rsi._period, sig.rsi_value, sig.price,
+            )
+            self.log.warning("  %s", sig.detail)
+            self.log.warning(
+                "  ⤷ RSI dropping sharply from overbought — "
+                "fast momentum shift; consider CALL credit spread."
+            )
+            self.log.warning(B)
+
+        elif sig.kind == "BULLISH_REVERSAL":
+            self.log.warning(B)
+            self.log.warning(
+                "  ⚡🔺  BULLISH REVERSAL  |  %s  |  RSI(%d)=%.2f  |  Price=%.2f",
+                sig.timestamp, self._rsi._period, sig.rsi_value, sig.price,
+            )
+            self.log.warning("  %s", sig.detail)
+            self.log.warning(
+                "  ⤷ RSI rising sharply from oversold — "
+                "fast momentum shift; consider PUT credit spread."
+            )
+            self.log.warning(B)
+
+        # ── Track all signals for dashboard ────────────────────
+        self._reversal_signals.append({
+            "kind": sig.kind,
+            "timestamp": sig.timestamp,
+            "rsi": round(sig.rsi_value, 2),
+            "price": round(sig.price, 2),
+            "detail": sig.detail,
+        })
+        # Keep only the most recent 200 signals
+        if len(self._reversal_signals) > 200:
+            self._reversal_signals = self._reversal_signals[-200:]
+
+    # ──────────────────────────────────────────────────────────
+    # Dashboard State Writer
+    # ──────────────────────────────────────────────────────────
+
+    def _write_dashboard_state(self, price, timestamp):
+        """Write current state to a JSON file for the dashboard UI."""
+        import datetime as _dt
+        est = _dt.timezone(_dt.timedelta(hours=-5), "EST")
+        now_est = _dt.datetime.now(est).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+        rsi_val = self._rsi.current_rsi()
+        rsi_display = round(rsi_val, 2) if rsi_val is not None else None
+
+        state = {
+            "price": str(price),
+            "rsi": rsi_display,
+            "rsi_period": self._rsi._period,
+            "timestamp": timestamp,
+            "updated_at": now_est,
+            "signals": list(reversed(self._reversal_signals)),  # newest first
+        }
+        try:
+            tmp = self._STATE_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp, self._STATE_FILE)
+        except Exception:
+            pass  # Non-critical; don't disrupt streaming
 
     def on_heartbeat(self):
         self.log.debug("♥ heartbeat")
@@ -1168,7 +1448,7 @@ class SPXStreamer:
             self.log.info("─" * 100)
             self.log.info(
                 "[%-24s] %-9s %-9s %-9s %-9s %-8s %-12s | %s",
-                "Timestamp", "Open", "High", "Low", "Close", "Volume", "Status", "RSI(9)",
+                "Timestamp", "Open", "High", "Low", "Close", "Volume", "Status", f"RSI({self.cfg.rsi_period})",
             )
             self.log.info("─" * 100)
 
@@ -1274,7 +1554,7 @@ class SPXStreamer:
 # ══════════════════════════════════════════════════════════════
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Stream SPX 5-min candles with RSI(9) analysis")
+    p = argparse.ArgumentParser(description="Stream SPX 5-min candles with RSI analysis")
     p.add_argument("--config", default="config.yaml")
     return p.parse_args()
 
@@ -1289,25 +1569,43 @@ def main():
     log = setup_logging(cfg)
 
     log.info("═" * 70)
-    log.info("  SPX Candle Streamer + RSI(9) Monitor")
+    log.info("  SPX Candle Streamer + RSI(%d) Monitor", cfg.rsi_period)
     log.info("  Mode    : %s", cfg.account_mode.upper())
     log.info("  Symbol  : %s   Interval: %d-min", cfg.symbol, cfg.bar_interval)
     log.info("  RSI     : period=%d  |  OB=%.0f  OS=%.0f",
              cfg.rsi_period, cfg.rsi_overbought, cfg.rsi_oversold)
+    log.info("  Zones   : signal_upper=%.0f  signal_lower=%.0f",
+             cfg.rsi_signal_zone_upper, cfg.rsi_signal_zone_lower)
     log.info("  Plateau : window=%d bars  threshold=±%.2f RSI pts",
              cfg.rsi_plateau_window, cfg.rsi_plateau_threshold)
-    log.info("  Divergence: lookback=%d bars  min_price=%.2f%%  min_rsi_delta=%.1f pts",
-             cfg.rsi_divergence_lookback,
+    log.info("  Divergence: lookback=%d–%d bars  min_price=%.2f%%  min_rsi_delta=%.1f pts",
+             cfg.rsi_divergence_lookback_min, cfg.rsi_divergence_lookback_max,
              cfg.rsi_divergence_min_price_move_pct,
              cfg.rsi_divergence_min_rsi_delta)
+    log.info("  Reversal: window=%d bars  drop=%.1f  rise=%.1f",
+             cfg.rsi_reversal_window, cfg.rsi_reversal_drop,
+             cfg.rsi_reversal_rise)
     log.info("═" * 70)
 
     token_mgr = TokenManager(cfg, log)
     streamer  = SPXStreamer(cfg, token_mgr, log)
 
-    import signal
-    import threading
-    
+    # ── Start embedded dashboard server in a background thread ──
+    from dashboard import app as dashboard_app
+    import logging as _logging
+    # Suppress Flask/Werkzeug request logs to keep streamer output clean
+    _logging.getLogger("werkzeug").setLevel(_logging.WARNING)
+    dashboard_port = 5050
+    dashboard_thread = threading.Thread(
+        target=lambda: dashboard_app.run(
+            host="0.0.0.0", port=dashboard_port, debug=False, use_reloader=False
+        ),
+        daemon=True,
+    )
+    dashboard_thread.start()
+    log.info("📊 Dashboard started at http://localhost:%d", dashboard_port)
+    threading.Timer(2.0, lambda: webbrowser.open(f"http://localhost:{dashboard_port}")).start()
+
     shutdown_event = threading.Event()
     
     def _sigint(sig, frame):

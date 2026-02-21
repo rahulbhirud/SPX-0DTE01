@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SPX Dashboard</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card: #1a1d28;
+            --border: #2a2d3a;
+            --text: #e1e4eb;
+            --muted: #8b8fa3;
+            --green: #22c55e;
+            --red: #ef4444;
+            --amber: #f59e0b;
+            --blue: #3b82f6;
+            --purple: #a855f7;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header h1 {
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+
+        .header h1 span { color: var(--blue); }
+
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .pulse {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+        }
+
+        .card-price::before { background: var(--blue); }
+        .card-rsi::before { background: var(--purple); }
+
+        .card-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--muted);
+            margin-bottom: 8px;
+        }
+
+        .card-value {
+            font-size: 42px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .card-sub {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 8px;
+        }
+
+        .rsi-bar {
+            margin-top: 12px;
+            height: 6px;
+            background: #2a2d3a;
+            border-radius: 3px;
+            position: relative;
+            overflow: visible;
+        }
+
+        .rsi-marker {
+            position: absolute;
+            top: -4px;
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            background: var(--purple);
+            border: 2px solid var(--bg);
+            transform: translateX(-50%);
+            transition: left 0.5s ease;
+        }
+
+        .rsi-zones {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 8px;
+        }
+
+        .rsi-oversold { color: var(--green); }
+        .rsi-overbought { color: var(--red); }
+        .rsi-neutral { color: var(--text); }
+
+        .signals-section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .signals-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .signals-header h2 {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .signal-count {
+            font-size: 12px;
+            background: var(--border);
+            padding: 2px 10px;
+            border-radius: 12px;
+            color: var(--muted);
+        }
+
+        .signals-list {
+            max-height: 480px;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+        }
+
+        .signals-list::-webkit-scrollbar { width: 6px; }
+        .signals-list::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        .signal-row {
+            display: grid;
+            grid-template-columns: auto 1fr auto auto;
+            gap: 12px;
+            align-items: center;
+            padding: 12px 20px;
+            border-bottom: 1px solid rgba(42, 45, 58, 0.5);
+            font-size: 13px;
+            transition: background 0.15s;
+        }
+
+        .signal-row:hover { background: rgba(59, 130, 246, 0.05); }
+
+        .signal-badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+
+        .badge-bearish-reversal  { background: rgba(239,68,68,0.15); color: var(--red); }
+        .badge-bullish-reversal  { background: rgba(34,197,94,0.15); color: var(--green); }
+        .badge-bearish-divergence{ background: rgba(239,68,68,0.1); color: #f87171; }
+        .badge-bullish-divergence{ background: rgba(34,197,94,0.1); color: #4ade80; }
+        .badge-plateau           { background: rgba(245,158,11,0.15); color: var(--amber); }
+
+        .signal-detail {
+            color: var(--muted);
+            font-size: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .signal-rsi {
+            color: var(--purple);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .signal-time {
+            color: var(--muted);
+            font-size: 11px;
+            white-space: nowrap;
+        }
+
+        .no-signals {
+            padding: 48px 20px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .cards { grid-template-columns: 1fr; }
+            .card-value { font-size: 32px; }
+            .signal-row { grid-template-columns: auto 1fr; }
+            .signal-rsi, .signal-time { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1><span>SPX</span> 0DTE Dashboard</h1>
+    <div class="status-bar">
+        <div class="pulse" id="pulse"></div>
+        <span id="updated-at">{{ state.updated_at }}</span>
+    </div>
+</div>
+
+<div class="cards">
+    <div class="card card-price">
+        <div class="card-label">SPX Price</div>
+        <div class="card-value" id="spx-price">{{ state.price }}</div>
+        <div class="card-sub" id="price-ts" data-utc="{{ state.timestamp }}">{{ state.timestamp }}</div>
+    </div>
+    <div class="card card-rsi">
+        <div class="card-label">RSI({{ state.rsi_period }})</div>
+        <div class="card-value" id="rsi-value">
+            {% if state.rsi is not none %}{{ "%.2f"|format(state.rsi) }}{% else %}—{% endif %}
+        </div>
+        <div class="rsi-bar">
+            <div class="rsi-marker" id="rsi-marker"
+                 style="left: {% if state.rsi is not none %}{{ state.rsi }}%{% else %}50%{% endif %}">
+            </div>
+        </div>
+        <div class="rsi-zones">
+            <span class="rsi-oversold">30 Oversold</span>
+            <span>50</span>
+            <span class="rsi-overbought">70 Overbought</span>
+        </div>
+    </div>
+</div>
+
+<div class="signals-section">
+    <div class="signals-header">
+        <h2>⚡ Reversal &amp; Divergence Signals</h2>
+        <span class="signal-count" id="signal-count">{{ state.signals|length }} signals</span>
+    </div>
+    <div class="signals-list" id="signals-list">
+        {% if state.signals %}
+            {% for sig in state.signals %}
+            <div class="signal-row">
+                <span class="signal-badge badge-{{ sig.kind|lower|replace('_', '-') }}">
+                    {{ sig.kind|replace('_', ' ') }}
+                </span>
+                <span class="signal-detail">{{ sig.detail }}</span>
+                <span class="signal-rsi">RSI {{ sig.rsi }}</span>
+                <span class="signal-time" data-utc="{{ sig.timestamp }}">{{ sig.timestamp }}</span>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="no-signals">No signals yet — waiting for stream data…</div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    const POLL_INTERVAL = 2000; // ms
+
+    function toEST(utcStr) {
+        if (!utcStr) return '';
+        try {
+            const d = new Date(utcStr);
+            if (isNaN(d)) return utcStr;
+            return d.toLocaleString('en-US', {
+                timeZone: 'America/New_York',
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: true
+            }) + ' EST';
+        } catch(e) { return utcStr; }
+    }
+
+    // Convert initial server-rendered UTC timestamps to EST
+    document.addEventListener('DOMContentLoaded', function() {
+        const priceTs = document.getElementById('price-ts');
+        if (priceTs) priceTs.textContent = toEST(priceTs.dataset.utc);
+        document.querySelectorAll('.signal-time').forEach(el => {
+            el.textContent = toEST(el.dataset.utc);
+        });
+    });
+
+    function badgeClass(kind) {
+        return 'badge-' + kind.toLowerCase().replace(/_/g, '-');
+    }
+
+    function formatKind(kind) {
+        return kind.replace(/_/g, ' ');
+    }
+
+    function getRsiColor(rsi) {
+        if (rsi === null) return '#a855f7';
+        if (rsi >= 70) return '#ef4444';
+        if (rsi <= 30) return '#22c55e';
+        return '#a855f7';
+    }
+
+    function update() {
+        fetch('/api/state')
+            .then(r => r.json())
+            .then(data => {
+                // Price
+                document.getElementById('spx-price').textContent = data.price;
+                document.getElementById('price-ts').textContent = toEST(data.timestamp);
+
+                // RSI
+                const rsiEl = document.getElementById('rsi-value');
+                const marker = document.getElementById('rsi-marker');
+                if (data.rsi !== null) {
+                    rsiEl.textContent = data.rsi.toFixed(2);
+                    rsiEl.style.color = getRsiColor(data.rsi);
+                    marker.style.left = data.rsi + '%';
+                    marker.style.background = getRsiColor(data.rsi);
+                } else {
+                    rsiEl.textContent = '—';
+                }
+
+                // Timestamp
+                document.getElementById('updated-at').textContent = data.updated_at;
+
+                // Signals
+                const list = document.getElementById('signals-list');
+                const countEl = document.getElementById('signal-count');
+                countEl.textContent = data.signals.length + ' signals';
+
+                if (data.signals.length === 0) {
+                    list.innerHTML = '<div class="no-signals">No signals yet — waiting for stream data…</div>';
+                } else {
+                    let html = '';
+                    data.signals.forEach(sig => {
+                        html += `<div class="signal-row">
+                            <span class="signal-badge ${badgeClass(sig.kind)}">${formatKind(sig.kind)}</span>
+                            <span class="signal-detail">${sig.detail}</span>
+                            <span class="signal-rsi">RSI ${sig.rsi}</span>
+                            <span class="signal-time">${toEST(sig.timestamp)}</span>
+                        </div>`;
+                    });
+                    list.innerHTML = html;
+                }
+
+                // Pulse animation
+                document.getElementById('pulse').style.background = '#22c55e';
+            })
+            .catch(() => {
+                document.getElementById('pulse').style.background = '#ef4444';
+            });
+    }
+
+    setInterval(update, POLL_INTERVAL);
+</script>
+
+</body>
+</html>
