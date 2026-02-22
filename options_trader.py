@@ -165,18 +165,19 @@ class OptionsTrader:
                 * ``OrderType`` must be one of: ``Limit``, ``StopMarket``,
                     ``Market``, or ``StopLimit``.
                 * For opening credit spreads, ``OrderType`` is ``"Limit"``.
-        * ``LimitPrice`` is the desired net credit as a *positive* string.
+            * ``LimitPrice`` is the desired net credit as a *negative* string.
         * ``Route`` is omitted — index-option spreads are routed
           automatically by the exchange.
         """
         short_symbol = spread["short_symbol"]
         long_symbol  = spread["long_symbol"]
         net_credit   = round(_safe_float(spread.get("net_credit")), 2)
+        limit_price  = -abs(net_credit)
 
         payload: Dict[str, Any] = {
             "AccountID": self.cfg.account_id,
             "OrderType": "Limit",
-            "LimitPrice": f"{net_credit:.2f}",
+            "LimitPrice": f"{limit_price:.2f}",
             "TimeInForce": {"Duration": "GTC"},
             "Legs": [
                 {

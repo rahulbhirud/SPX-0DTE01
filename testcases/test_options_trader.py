@@ -292,7 +292,7 @@ class TestBuildOrderPayload:
         payload = trader._build_order_payload(spread, quantity=1)
         assert payload["OrderType"] == "Limit"
 
-    def test_limit_price_is_positive(self, cfg, token_mgr, logger):
+    def test_limit_price_is_negative(self, cfg, token_mgr, logger):
         trader = OptionsTrader(cfg, token_mgr, logger)
         spread = {
             "short_symbol": "SPXW 260223P6775",
@@ -300,7 +300,7 @@ class TestBuildOrderPayload:
             "net_credit": 0.6,
         }
         payload = trader._build_order_payload(spread, quantity=1)
-        assert payload["LimitPrice"] == "0.60"
+        assert payload["LimitPrice"] == "-0.60"
 
     def test_no_route_field(self, cfg, token_mgr, logger):
         trader = OptionsTrader(cfg, token_mgr, logger)

@@ -153,12 +153,17 @@
 
         .trade-btn {
             font-family: inherit;
-            font-size: 13px;
+            font-size: 18px;
             font-weight: 600;
-            letter-spacing: 0.5px;
-            padding: 10px 22px;
+            letter-spacing: 0;
+            padding: 0;
+            width: 40px;
+            height: 40px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             transition: opacity 0.2s, transform 0.1s;
         }
@@ -181,6 +186,12 @@
             background: rgba(34, 197, 94, 0.2);
             color: var(--green);
             border: 1px solid var(--green);
+        }
+
+        .btn-orders {
+            background: rgba(59, 130, 246, 0.2);
+            color: var(--blue);
+            border: 1px solid var(--blue);
         }
 
         .trade-status {
@@ -219,6 +230,122 @@
             .card-value { font-size: 32px; }
             .trade-row { flex-direction: column; }
         }
+
+        /* ── Open Orders Modal ─────────────────────── */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal {
+            width: min(980px, 100%);
+            max-height: 88vh;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal-title {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+        }
+
+        .modal-close {
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--muted);
+            font-family: inherit;
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+        }
+
+        .modal-close:hover {
+            color: var(--text);
+            border-color: var(--text);
+        }
+
+        .orders-body {
+            padding: 14px 16px 16px;
+            overflow: auto;
+        }
+
+        .orders-message {
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+
+        .orders-message.success { color: var(--green); }
+        .orders-message.error { color: var(--red); }
+
+        .orders-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .orders-table th,
+        .orders-table td {
+            border-bottom: 1px solid var(--border);
+            padding: 10px 8px;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .orders-table th {
+            color: var(--muted);
+            font-size: 11px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            position: sticky;
+            top: 0;
+            background: var(--card);
+        }
+
+        .cancel-btn {
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid var(--amber);
+            color: var(--amber);
+            background: rgba(245, 158, 11, 0.12);
+        }
+
+        .cancel-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .limit-price-negative { color: var(--red); }
+        .limit-price-positive { color: var(--green); }
+        .limit-price-neutral { color: var(--muted); }
     </style>
 </head>
 <body>
@@ -256,10 +383,37 @@
 </div>
 
 <div class="trade-row">
-    <button class="trade-btn btn-call" id="btn-open-call" onclick="openSpread('call')">▲ Open Call Credit</button>
-    <button class="trade-btn btn-put" id="btn-open-put" onclick="openSpread('put')">▼ Open Put Credit</button>
+    <button class="trade-btn btn-call" id="btn-open-call" onclick="openSpread('call')" title="Open Call Credit Spread">▲</button>
+    <button class="trade-btn btn-put" id="btn-open-put" onclick="openSpread('put')" title="Open Put Credit Spread">▼</button>
+    <button class="trade-btn btn-orders" id="btn-view-orders" onclick="openOrdersModal()" title="View Open Orders">☰</button>
 </div>
 <div class="trade-status" id="trade-status"></div>
+
+<div class="modal-overlay" id="orders-modal-overlay" onclick="overlayClose(event)">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="orders-modal-title">
+        <div class="modal-header">
+            <div class="modal-title" id="orders-modal-title">Open Orders</div>
+            <button class="modal-close" onclick="closeOrdersModal()">Close</button>
+        </div>
+        <div class="orders-body">
+            <div class="orders-message" id="orders-message">Loading open orders…</div>
+            <table class="orders-table" id="orders-table" style="display:none;">
+                <thead>
+                <tr>
+                    <th>Order ID</th>
+                    <th>Status</th>
+                    <th>Symbol(s)</th>
+                    <th>Qty</th>
+                    <th>Type</th>
+                    <th>Limit Price</th>
+                    <th>Action</th>
+                </tr>
+                </thead>
+                <tbody id="orders-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
 
 <script>
     const POLL_INTERVAL = 2000; // ms
@@ -371,6 +525,254 @@
         .finally(() => {
             btnCall.disabled = false;
             btnPut.disabled  = false;
+        });
+    }
+
+    function openOrdersModal() {
+        const overlay = document.getElementById('orders-modal-overlay');
+        overlay.style.display = 'flex';
+        loadOpenOrders();
+    }
+
+    function closeOrdersModal() {
+        document.getElementById('orders-modal-overlay').style.display = 'none';
+    }
+
+    function overlayClose(event) {
+        if (event.target && event.target.id === 'orders-modal-overlay') {
+            closeOrdersModal();
+        }
+    }
+
+    function normalizeOrderStatus(order) {
+        return order.Status || order.status || order.OrderStatus || order.orderStatus || '—';
+    }
+
+    function resolveOrderId(order) {
+        return order.OrderID || order.orderID || order.OrderId || order.orderId || '';
+    }
+
+    function extractStrikeFromSymbol(symbol) {
+        if (!symbol) return null;
+        const s = String(symbol).trim();
+
+        // Common TradeStation/OCC style: "SPXW 260223P6775" or "SPXW 260223C6775.5"
+        const occMatch = s.match(/\d{6}[CP](\d+(?:\.\d+)?)$/i);
+        if (occMatch && occMatch[1]) {
+            return occMatch[1];
+        }
+
+        // Generic fallback: trailing numeric value (option strike often last token)
+        const tailNum = s.match(/(\d+(?:\.\d+)?)\s*$/);
+        if (tailNum && tailNum[1]) {
+            return tailNum[1];
+        }
+        return null;
+    }
+
+    function resolveSymbols(order) {
+        if (Array.isArray(order.Legs) && order.Legs.length > 0) {
+            let shortStrike = null;
+            let longStrike = null;
+
+            order.Legs.forEach(leg => {
+                const symbol = leg.Symbol || leg.symbol || '';
+                const action = (leg.TradeAction || leg.tradeAction || '').toString().toUpperCase();
+                const strike = extractStrikeFromSymbol(symbol);
+                if (!strike) return;
+
+                if (action.startsWith('SELL')) {
+                    shortStrike = strike;
+                } else if (action.startsWith('BUY')) {
+                    longStrike = strike;
+                }
+            });
+
+            if (!shortStrike || !longStrike) {
+                const strikes = order.Legs
+                    .map(l => extractStrikeFromSymbol(l.Symbol || l.symbol || ''))
+                    .filter(v => v !== null);
+                if (!shortStrike && strikes.length > 0) shortStrike = strikes[0];
+                if (!longStrike && strikes.length > 1) longStrike = strikes[1];
+            }
+
+            if (shortStrike || longStrike) {
+                return `${shortStrike || '—'}/${longStrike || '—'}`;
+            }
+
+            return order.Legs.map(l => l.Symbol || l.symbol || '—').join(', ');
+        }
+
+        const singleSymbol = order.Symbol || order.symbol || '';
+        const singleStrike = extractStrikeFromSymbol(singleSymbol);
+        if (singleStrike) {
+            return `${singleStrike}/—`;
+        }
+        return singleSymbol || '—';
+    }
+
+    function firstPresentValue(obj, keys) {
+        for (const key of keys) {
+            const val = obj ? obj[key] : undefined;
+            if (val !== undefined && val !== null && val !== '') {
+                return val;
+            }
+        }
+        return null;
+    }
+
+    function resolveQty(order) {
+        if (Array.isArray(order.Legs) && order.Legs.length > 0) {
+            const legValues = order.Legs.map(l => firstPresentValue(l, [
+                'Quantity',
+                'quantity',
+                'OrderQuantity',
+                'orderQuantity',
+                'QuantityOrdered',
+                'quantityOrdered',
+                'RemainingQuantity',
+                'remainingQuantity',
+                'LeavesQuantity',
+                'leavesQuantity',
+                'OpenQuantity',
+                'openQuantity'
+            ]));
+
+            const validLegValues = legValues.filter(v => v !== null);
+            if (validLegValues.length > 0) {
+                return validLegValues.join(', ');
+            }
+        }
+
+        const orderQty = firstPresentValue(order, [
+            'Quantity',
+            'quantity',
+            'OrderQuantity',
+            'orderQuantity',
+            'QuantityOrdered',
+            'quantityOrdered',
+            'RemainingQuantity',
+            'remainingQuantity',
+            'LeavesQuantity',
+            'leavesQuantity',
+            'OpenQuantity',
+            'openQuantity'
+        ]);
+        return orderQty !== null ? orderQty : '—';
+    }
+
+    function resolveType(order) {
+        return order.OrderType || order.orderType || '—';
+    }
+
+    function resolveLimitPrice(order) {
+        const raw = firstPresentValue(order, [
+            'LimitPrice',
+            'limitPrice',
+            'limit_price',
+            'Price',
+            'price'
+        ]);
+        if (raw === null) {
+            return '<span class="limit-price-neutral">—</span>';
+        }
+
+        const n = Number(raw);
+        if (!Number.isNaN(n)) {
+            if (n < 0) {
+                return `<span class="limit-price-negative">${n.toFixed(2)}</span>`;
+            }
+            if (n > 0) {
+                return `<span class="limit-price-positive">${n.toFixed(2)}</span>`;
+            }
+            return `<span class="limit-price-neutral">${n.toFixed(2)}</span>`;
+        }
+        return `<span class="limit-price-neutral">${String(raw)}</span>`;
+    }
+
+    function loadOpenOrders() {
+        const messageEl = document.getElementById('orders-message');
+        const tableEl = document.getElementById('orders-table');
+        const tbody = document.getElementById('orders-tbody');
+
+        messageEl.className = 'orders-message';
+        messageEl.textContent = 'Loading open orders…';
+        tableEl.style.display = 'none';
+        tbody.innerHTML = '';
+
+        fetch('/api/open_orders')
+            .then(r => r.json().then(body => ({ ok: r.ok, body })))
+            .then(({ ok, body }) => {
+                if (!ok || !body.success) {
+                    throw new Error(body.message || 'Failed to load open orders.');
+                }
+
+                const orders = Array.isArray(body.orders) ? body.orders : [];
+                if (orders.length === 0) {
+                    messageEl.className = 'orders-message';
+                    messageEl.textContent = 'No open orders.';
+                    return;
+                }
+
+                messageEl.className = 'orders-message';
+                messageEl.textContent = 'Open orders: ' + orders.length;
+                tableEl.style.display = 'table';
+
+                orders.forEach(order => {
+                    const orderId = resolveOrderId(order);
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${orderId || '—'}</td>
+                        <td>${normalizeOrderStatus(order)}</td>
+                        <td>${resolveSymbols(order)}</td>
+                        <td>${resolveQty(order)}</td>
+                        <td>${resolveType(order)}</td>
+                        <td>${resolveLimitPrice(order)}</td>
+                        <td><button class="cancel-btn" data-order-id="${orderId}">Cancel</button></td>
+                    `;
+
+                    const btn = row.querySelector('.cancel-btn');
+                    if (!orderId) {
+                        btn.disabled = true;
+                        btn.title = 'OrderID not available';
+                    } else {
+                        btn.addEventListener('click', () => cancelOrder(orderId, btn));
+                    }
+
+                    tbody.appendChild(row);
+                });
+            })
+            .catch(err => {
+                messageEl.className = 'orders-message error';
+                messageEl.textContent = 'Open orders load error: ' + err.message;
+            });
+    }
+
+    function cancelOrder(orderId, btn) {
+        const messageEl = document.getElementById('orders-message');
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = 'Canceling…';
+
+        fetch('/api/cancel_order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_id: orderId })
+        })
+        .then(r => r.json().then(body => ({ ok: r.ok, body })))
+        .then(({ ok, body }) => {
+            if (!ok || !body.success) {
+                throw new Error(body.message || ('Failed to cancel order ' + orderId));
+            }
+            messageEl.className = 'orders-message success';
+            messageEl.textContent = body.message || ('Cancel request sent for order ' + orderId + '.');
+            loadOpenOrders();
+        })
+        .catch(err => {
+            messageEl.className = 'orders-message error';
+            messageEl.textContent = 'Cancel error: ' + err.message;
+            btn.disabled = false;
+            btn.textContent = originalText;
         });
     }
 </script>
