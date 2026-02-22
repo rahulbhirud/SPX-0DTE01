@@ -77,17 +77,6 @@ rsi:
   plateau_window: 3          # Number of consecutive closed bars to examine
   plateau_threshold: 3.0     # Max RSI point range to qualify as a plateau
 
-  # ── Divergence Detection ──────────────────────────────────
-  # Scans a RANGE of lookback bars to find the best pivot (swing high/low)
-  # instead of checking only one fixed bar.  This catches divergences even
-  # if the swing happened 3, 5, or 10 bars ago.
-  #
-  # Bearish: price High goes up  +  RSI goes down  → momentum fading
-  # Bullish: price Low  goes down  +  RSI goes up   → selling pressure fading
-  divergence_lookback_min: 3         # Earliest bar to scan for a pivot
-  divergence_lookback_max: 10        # Latest bar to scan for a pivot
-  divergence_min_price_move_pct: 0.05 # Min % move in High/Low (halved for fast markets)
-  divergence_min_rsi_delta: 1.5      # RSI must diverge by at least this many points
 
   # ── RSI Reversal (Momentum Shift) ────────────────────────
   # Fires when RSI drops/rises sharply from an extreme zone within
