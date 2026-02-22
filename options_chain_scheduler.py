@@ -97,6 +97,21 @@ def _resolve_trading_day(target: str | date | None = None) -> date:
     return d
 
 
+def _build_occ_symbol(root: str, expiration: date, side: str, strike: float) -> str:
+    """Construct an OCC option symbol from its components.
+
+    Format: ``ROOT YYMMDDC/PSTRIKE``
+    Example: ``SPXW 260210C7040``
+
+    *root* is cleaned: leading ``$`` and trailing ``.X`` / ``.`` are stripped.
+    """
+    clean = root.lstrip("$").split(".")[0].upper()
+    exp_str = expiration.strftime("%y%m%d")
+    cp = "C" if side.upper().startswith("C") else "P"
+    strike_str = f"{strike:g}"
+    return f"{clean} {exp_str}{cp}{strike_str}"
+
+
 def _now_est() -> datetime:
     return datetime.now(_EST)
 
@@ -268,8 +283,14 @@ class OptionsChainScheduler:
                     if strike <= 0:
                         continue
 
+                    raw_symbol = (data.get("Symbol") or "").strip()
+                    if not raw_symbol:
+                        raw_symbol = _build_occ_symbol(
+                            self._underlying, trading_day, side, strike
+                        )
+
                     leg = OptionLeg(
-                        symbol=data.get("Symbol", ""),
+                        symbol=raw_symbol,
                         strike=strike,
                         side=side,
                         bid=_safe_float(data.get("Bid")),

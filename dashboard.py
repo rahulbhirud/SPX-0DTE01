@@ -15,10 +15,11 @@ import argparse
 import json
 import logging
 import os
+import sys
 import threading
 import webbrowser
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__, template_folder="templates")
 
@@ -51,6 +52,51 @@ def index():
 def api_state():
     """JSON endpoint for AJAX polling."""
     return jsonify(_read_state())
+
+
+# ── Trade execution endpoints ─────────────────────────────────
+
+def _get_trader():
+    """Lazily build an OptionsTrader using the same Config/TokenManager
+    that the streamer uses.  Cached on the Flask app object."""
+    if not hasattr(app, "_trader"):
+        from spx_stream import Config, TokenManager, setup_logging
+        from options_trader import OptionsTrader
+
+        config_path = os.environ.get("SPX_CONFIG", "config.yaml")
+        cfg = Config(config_path)
+        log = setup_logging(cfg)
+        token_mgr = TokenManager(cfg, log)
+        app._trader = OptionsTrader(cfg, token_mgr, log)
+    return app._trader
+
+
+@app.route("/api/open_call_credit", methods=["POST"])
+def api_open_call_credit():
+    """Open a call credit spread (max premium from options_data_config.json)."""
+    qty = request.json.get("quantity", 1) if request.is_json else 1
+    try:
+        trader = _get_trader()
+        resp = trader.open_call_credit_spread(quantity=int(qty))
+        if resp is None:
+            return jsonify({"success": False, "message": "No valid call credit spread available or order failed. Check logs."}), 400
+        return jsonify({"success": True, "message": "Call credit spread order submitted.", "order": resp})
+    except Exception as exc:
+        return jsonify({"success": False, "message": str(exc)}), 500
+
+
+@app.route("/api/open_put_credit", methods=["POST"])
+def api_open_put_credit():
+    """Open a put credit spread (max premium from options_data_config.json)."""
+    qty = request.json.get("quantity", 1) if request.is_json else 1
+    try:
+        trader = _get_trader()
+        resp = trader.open_put_credit_spread(quantity=int(qty))
+        if resp is None:
+            return jsonify({"success": False, "message": "No valid put credit spread available or order failed. Check logs."}), 400
+        return jsonify({"success": True, "message": "Put credit spread order submitted.", "order": resp})
+    except Exception as exc:
+        return jsonify({"success": False, "message": str(exc)}), 500
 
 
 def main():
