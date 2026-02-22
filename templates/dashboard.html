@@ -143,105 +143,6 @@
         .rsi-overbought { color: var(--red); }
         .rsi-neutral { color: var(--text); }
 
-        .signals-section {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            overflow: hidden;
-        }
-
-        .signals-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .signals-header h2 {
-            font-size: 14px;
-            font-weight: 600;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-        }
-
-        .signal-count {
-            font-size: 12px;
-            background: var(--border);
-            padding: 2px 10px;
-            border-radius: 12px;
-            color: var(--muted);
-        }
-
-        .signals-list {
-            max-height: 480px;
-            overflow-y: auto;
-            scrollbar-width: thin;
-            scrollbar-color: var(--border) transparent;
-        }
-
-        .signals-list::-webkit-scrollbar { width: 6px; }
-        .signals-list::-webkit-scrollbar-thumb {
-            background: var(--border);
-            border-radius: 3px;
-        }
-
-        .signal-row {
-            display: grid;
-            grid-template-columns: auto 1fr auto auto;
-            gap: 12px;
-            align-items: center;
-            padding: 12px 20px;
-            border-bottom: 1px solid rgba(42, 45, 58, 0.5);
-            font-size: 13px;
-            transition: background 0.15s;
-        }
-
-        .signal-row:hover { background: rgba(59, 130, 246, 0.05); }
-
-        .signal-badge {
-            font-size: 11px;
-            font-weight: 600;
-            padding: 3px 10px;
-            border-radius: 6px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            white-space: nowrap;
-        }
-
-        .badge-bearish-reversal  { background: rgba(239,68,68,0.15); color: var(--red); }
-        .badge-bullish-reversal  { background: rgba(34,197,94,0.15); color: var(--green); }
-        .badge-bearish-divergence{ background: rgba(239,68,68,0.1); color: #f87171; }
-        .badge-bullish-divergence{ background: rgba(34,197,94,0.1); color: #4ade80; }
-        .badge-plateau           { background: rgba(245,158,11,0.15); color: var(--amber); }
-
-        .signal-detail {
-            color: var(--muted);
-            font-size: 12px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .signal-rsi {
-            color: var(--purple);
-            font-weight: 600;
-            white-space: nowrap;
-        }
-
-        .signal-time {
-            color: var(--muted);
-            font-size: 11px;
-            white-space: nowrap;
-        }
-
-        .no-signals {
-            padding: 48px 20px;
-            text-align: center;
-            color: var(--muted);
-            font-size: 14px;
-        }
-
         /* ── Trade Buttons ──────────────────────────── */
         .trade-row {
             display: flex;
@@ -316,8 +217,6 @@
         @media (max-width: 768px) {
             .cards { grid-template-columns: 1fr; }
             .card-value { font-size: 32px; }
-            .signal-row { grid-template-columns: auto 1fr; }
-            .signal-rsi, .signal-time { display: none; }
             .trade-row { flex-direction: column; }
         }
     </style>
@@ -362,29 +261,6 @@
 </div>
 <div class="trade-status" id="trade-status"></div>
 
-<div class="signals-section">
-    <div class="signals-header">
-        <h2>⚡ Reversal &amp; Divergence Signals</h2>
-        <span class="signal-count" id="signal-count">{{ state.signals|length }} signals</span>
-    </div>
-    <div class="signals-list" id="signals-list">
-        {% if state.signals %}
-            {% for sig in state.signals %}
-            <div class="signal-row">
-                <span class="signal-badge badge-{{ sig.kind|lower|replace('_', '-') }}">
-                    {{ sig.kind|replace('_', ' ') }}
-                </span>
-                <span class="signal-detail">{{ sig.detail }}</span>
-                <span class="signal-rsi">RSI {{ sig.rsi }}</span>
-                <span class="signal-time" data-utc="{{ sig.timestamp }}">{{ sig.timestamp }}</span>
-            </div>
-            {% endfor %}
-        {% else %}
-            <div class="no-signals">No signals yet — waiting for stream data…</div>
-        {% endif %}
-    </div>
-</div>
-
 <script>
     const POLL_INTERVAL = 2000; // ms
 
@@ -410,14 +286,6 @@
             el.textContent = toEST(el.dataset.utc);
         });
     });
-
-    function badgeClass(kind) {
-        return 'badge-' + kind.toLowerCase().replace(/_/g, '-');
-    }
-
-    function formatKind(kind) {
-        return kind.replace(/_/g, ' ');
-    }
 
     function getRsiColor(rsi) {
         if (rsi === null) return '#a855f7';
@@ -448,26 +316,6 @@
 
                 // Timestamp
                 document.getElementById('updated-at').textContent = data.updated_at;
-
-                // Signals
-                const list = document.getElementById('signals-list');
-                const countEl = document.getElementById('signal-count');
-                countEl.textContent = data.signals.length + ' signals';
-
-                if (data.signals.length === 0) {
-                    list.innerHTML = '<div class="no-signals">No signals yet — waiting for stream data…</div>';
-                } else {
-                    let html = '';
-                    data.signals.forEach(sig => {
-                        html += `<div class="signal-row">
-                            <span class="signal-badge ${badgeClass(sig.kind)}">${formatKind(sig.kind)}</span>
-                            <span class="signal-detail">${sig.detail}</span>
-                            <span class="signal-rsi">RSI ${sig.rsi}</span>
-                            <span class="signal-time">${toEST(sig.timestamp)}</span>
-                        </div>`;
-                    });
-                    list.innerHTML = html;
-                }
 
                 // Pulse animation
                 document.getElementById('pulse').style.background = '#22c55e';

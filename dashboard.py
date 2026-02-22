@@ -2,7 +2,7 @@
 dashboard.py
 ────────────
 Simple web dashboard for SPX streamer.
-Displays current SPX price, latest RSI, and a scrollable reversal signal log.
+Displays current SPX price and latest RSI.
 
 Reads from dashboard_state.json written by spx_stream.py.
 
@@ -38,7 +38,6 @@ def _read_state() -> dict:
             "rsi_period": 9,
             "timestamp": "",
             "updated_at": "Waiting for data…",
-            "signals": [],
         }
 
 
