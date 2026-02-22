@@ -402,6 +402,7 @@
                 <tr>
                     <th>Order ID</th>
                     <th>Status</th>
+                    <th>Spread</th>
                     <th>Symbol(s)</th>
                     <th>Qty</th>
                     <th>Type</th>
@@ -665,6 +666,39 @@
         return order.OrderType || order.orderType || '—';
     }
 
+    function resolveSpreadType(order) {
+        // Explicit spread type field
+        const explicit = firstPresentValue(order, [
+            'SpreadType', 'spreadType', 'spread_type',
+            'Spread', 'spread',
+            'Description', 'description'
+        ]);
+        if (explicit) {
+            const upper = String(explicit).toUpperCase();
+            if (upper.includes('CALL') || upper.includes('BEAR_CALL')) return 'Call Credit';
+            if (upper.includes('PUT')  || upper.includes('BULL_PUT'))  return 'Put Credit';
+            // Generic values like "Vertical" – fall through to leg inference
+        }
+
+        // Infer from leg symbols: OCC symbols contain C or P before strike
+        if (Array.isArray(order.Legs) && order.Legs.length > 0) {
+            for (const leg of order.Legs) {
+                const sym = (leg.Symbol || leg.symbol || '').trim();
+                const m = sym.match(/\d{6}([CP])/i);
+                if (m) {
+                    return m[1].toUpperCase() === 'C' ? 'Call Credit' : 'Put Credit';
+                }
+            }
+            // Check leg OptionType field
+            for (const leg of order.Legs) {
+                const optType = (leg.OptionType || leg.optionType || '').toUpperCase();
+                if (optType === 'CALL') return 'Call Credit';
+                if (optType === 'PUT')  return 'Put Credit';
+            }
+        }
+        return '—';
+    }
+
     function resolveLimitPrice(order) {
         const raw = firstPresentValue(order, [
             'LimitPrice',
@@ -724,6 +758,7 @@
                     row.innerHTML = `
                         <td>${orderId || '—'}</td>
                         <td>${normalizeOrderStatus(order)}</td>
+                        <td>${resolveSpreadType(order)}</td>
                         <td>${resolveSymbols(order)}</td>
                         <td>${resolveQty(order)}</td>
                         <td>${resolveType(order)}</td>
