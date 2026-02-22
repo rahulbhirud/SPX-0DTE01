@@ -84,7 +84,7 @@ rsi:
   #
   # Example: RSI at 75 drops to 62 in 2 bars → BEARISH_REVERSAL
   reversal_enabled: true
-  reversal_window: 3         # Max bars over which the RSI swing occurred
+  reversal_window: 2         # Max bars over which the RSI swing occurred
   reversal_rsi_drop: 8.0     # Min RSI pts drop from recent peak (bearish)
   reversal_rsi_rise: 8.0     # Min RSI pts rise from recent trough (bullish)
 
