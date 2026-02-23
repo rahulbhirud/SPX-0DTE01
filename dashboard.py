@@ -162,6 +162,37 @@ def api_open_positions():
         return jsonify({"success": False, "message": str(exc)}), 500
 
 
+@app.route("/api/close_position", methods=["POST"])
+def api_close_position():
+    """Close an open credit spread at the current cost to close."""
+    if not request.is_json:
+        return jsonify({"success": False, "message": "JSON body required."}), 400
+
+    short_symbol = (request.json.get("short_symbol") or "").strip()
+    long_symbol = (request.json.get("long_symbol") or "").strip()
+    quantity = request.json.get("quantity")
+    limit_price = request.json.get("limit_price")
+
+    if not short_symbol or not long_symbol:
+        return jsonify({"success": False, "message": "short_symbol and long_symbol are required."}), 400
+    if quantity is None or limit_price is None:
+        return jsonify({"success": False, "message": "quantity and limit_price are required."}), 400
+
+    try:
+        trader = _get_trader()
+        resp = trader.close_credit_spread(
+            short_symbol=short_symbol,
+            long_symbol=long_symbol,
+            quantity=int(quantity),
+            limit_price=float(limit_price),
+        )
+        if resp is None:
+            return jsonify({"success": False, "message": "Close order failed. Check logs."}), 400
+        return jsonify({"success": True, "message": "Close order submitted.", "order": resp})
+    except Exception as exc:
+        return jsonify({"success": False, "message": str(exc)}), 500
+
+
 @app.route("/api/cancel_order", methods=["POST"])
 def api_cancel_order():
     """Cancel an order by OrderID."""

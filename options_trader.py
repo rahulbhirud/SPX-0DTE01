@@ -343,6 +343,76 @@ class OptionsTrader:
             self.log.exception("Call credit order unexpected error: %s", exc)
         return None
 
+    def close_credit_spread(
+        self,
+        short_symbol: str,
+        long_symbol: str,
+        quantity: int,
+        limit_price: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Submit a closing order for an open credit spread.
+
+        * BUY TO CLOSE the short leg
+        * SELL TO CLOSE the long leg
+        * Limit price = current cost to close (debit)
+
+        Returns the API response dict on success, or ``None`` on failure.
+        """
+        payload: Dict[str, Any] = {
+            "AccountID": self.cfg.account_id,
+            "OrderType": "Limit",
+            "LimitPrice": f"{abs(limit_price):.2f}",
+            "TimeInForce": {"Duration": "GTC"},
+            "Legs": [
+                {
+                    "Symbol": short_symbol,
+                    "Quantity": str(quantity),
+                    "TradeAction": "BUYTOCLOSE",
+                },
+                {
+                    "Symbol": long_symbol,
+                    "Quantity": str(quantity),
+                    "TradeAction": "SELLTOCLOSE",
+                },
+            ],
+        }
+
+        url = f"{self.cfg.base_url}/orderexecution/orders"
+        token = self.token_mgr.get_access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        self.log.info(
+            "Submitting close order | short=%s  long=%s  qty=%d  limit=%.2f",
+            short_symbol, long_symbol, quantity, limit_price,
+        )
+        self.log.debug("Close payload: %s", json.dumps(payload, indent=2))
+
+        try:
+            # Step 1 — confirm
+            self._confirm_order(payload, headers)
+            # Step 2 — place
+            resp = requests.post(url, headers=headers, json=payload, timeout=20)
+            if not resp.ok:
+                body = self._extract_resp_body(resp)
+                self.log.error(
+                    "Close order rejected (HTTP %d): %s", resp.status_code, body,
+                )
+                resp.raise_for_status()
+            resp_json = resp.json()
+            self._log_order_status("CLOSE SPREAD", resp_json)
+            return resp_json
+        except requests.exceptions.HTTPError as exc:
+            body = self._extract_resp_body(getattr(exc, "response", None))
+            self.log.error("Close order HTTP error: %s | body=%s", exc, body)
+        except requests.RequestException as exc:
+            self.log.error("Close order request failed: %s", exc)
+        except Exception as exc:
+            self.log.exception("Close order unexpected error: %s", exc)
+        return None
+
     def open_put_credit_spread(self, quantity: int | None = None) -> Optional[Dict[str, Any]]:
         """Select the put credit spread with the highest premium from
         ``options_data_config.json`` and submit an opening order.

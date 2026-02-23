@@ -418,6 +418,10 @@
             background: var(--amber);
         }
 
+        /* ── TradingView Chart ───────────────────── */
+        .tv-wrap { height: 600px; margin-bottom: 24px; }
+        #tv_chart { height: 100%; }
+
         .pnl-positive { color: var(--green); font-weight: 700; }
         .pnl-negative { color: var(--red); font-weight: 700; }
         .pnl-zero     { color: var(--muted); }
@@ -429,6 +433,25 @@
             border-bottom: none;
             padding-top: 12px;
         }
+
+        .close-pos-btn {
+            width: 28px;
+            height: 28px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--red);
+            background: rgba(239, 68, 68, 0.12);
+            color: var(--red);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 0;
+            transition: opacity 0.2s, transform 0.1s;
+        }
+        .close-pos-btn:hover { opacity: 0.85; }
+        .close-pos-btn:active { transform: scale(0.93); }
+        .close-pos-btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
     </style>
 </head>
 <body>
@@ -472,6 +495,11 @@
 </div>
 <div class="trade-status" id="trade-status"></div>
 
+<!-- ── TradingView Chart (hidden) ──────────────────────── -->
+<div class="tv-wrap" style="display:none;">
+    <div id="tv_chart"></div>
+</div>
+
 <!-- ── Open Positions Section ─────────────────────────── -->
 <div class="positions-section">
     <div class="positions-header">
@@ -491,6 +519,7 @@
                 <th>Cost to Close</th>
                 <th>Open P&amp;L</th>
                 <th>Short &#916;</th>
+                <th></th>
             </tr>
             </thead>
             <tbody id="positions-tbody"></tbody>
@@ -950,7 +979,12 @@
                         <td>$${s.current_cost.toFixed(2)}</td>
                         <td class="${pnlClass(s.open_pnl)}">$${s.open_pnl.toFixed(2)}</td>
                         <td>${s.short_delta.toFixed(4)}</td>
+                        <td><button class="close-pos-btn" title="Close position at $${s.current_cost.toFixed(2)}"
+                            data-short="${s.short_symbol}" data-long="${s.long_symbol}"
+                            data-qty="${s.contracts}" data-limit="${s.current_cost}">&#x2715;</button></td>
                     `;
+                    const closeBtn = row.querySelector('.close-pos-btn');
+                    closeBtn.addEventListener('click', () => closePosition(closeBtn));
                     tbody.appendChild(row);
                 });
 
@@ -960,6 +994,7 @@
                 totalRow.innerHTML = `
                     <td colspan="6" style="text-align:right;">Total P&amp;L</td>
                     <td class="${pnlClass(totalPnl)}">$${totalPnl.toFixed(2)}</td>
+                    <td></td>
                     <td></td>
                 `;
                 tbody.appendChild(totalRow);
@@ -974,6 +1009,52 @@
     // Initial load + 5s poll
     loadPositions();
     setInterval(loadPositions, POSITIONS_POLL);
+
+    function closePosition(btn) {
+        const shortSym  = btn.dataset.short;
+        const longSym   = btn.dataset.long;
+        const qty       = btn.dataset.qty;
+        const limit     = btn.dataset.limit;
+        const statusEl  = document.getElementById('trade-status');
+
+        btn.disabled = true;
+        statusEl.className = 'trade-status pending';
+        statusEl.textContent = 'Submitting close order…';
+
+        fetch('/api/close_position', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                short_symbol: shortSym,
+                long_symbol: longSym,
+                quantity: Number(qty),
+                limit_price: Number(limit)
+            })
+        })
+        .then(r => r.json().then(body => ({ ok: r.ok, body })))
+        .then(({ ok, body }) => {
+            if (ok && body.success) {
+                statusEl.className = 'trade-status success';
+                let msg = body.message || 'Close order submitted.';
+                if (body.order) {
+                    const o = body.order.Orders ? body.order.Orders[0] : body.order;
+                    if (o && o.OrderID) msg += '  |  OrderID: ' + o.OrderID;
+                    if (o && o.Status)  msg += '  |  Status: ' + o.Status;
+                }
+                statusEl.textContent = msg;
+                loadPositions();
+            } else {
+                statusEl.className = 'trade-status error';
+                statusEl.textContent = body.message || 'Close order failed.';
+                btn.disabled = false;
+            }
+        })
+        .catch(err => {
+            statusEl.className = 'trade-status error';
+            statusEl.textContent = 'Close request error: ' + err;
+            btn.disabled = false;
+        });
+    }
 
     function cancelOrder(orderId, btn) {
         const messageEl = document.getElementById('orders-message');
@@ -1003,6 +1084,26 @@
         });
     }
 </script>
+
+<!-- TradingView widget hidden for now
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+<script type="text/javascript">
+  new TradingView.widget({
+    autosize: true,
+    symbol: "SP:SPX",
+    interval: "5",
+    timezone: "America/New_York",
+    theme: "dark",
+    style: "1",
+    locale: "en",
+    enable_publishing: false,
+    allow_symbol_change: true,
+    withdateranges: true,
+    hide_side_toolbar: false,
+    container_id: "tv_chart"
+  });
+</script>
+-->
 
 </body>
 </html>

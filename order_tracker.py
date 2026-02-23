@@ -36,7 +36,8 @@ class OrderTracker:
         "DONE_FOR_DAY",
         "DONE",
         "OUT",
-        "REJ"
+        "REJ",
+        "FLL"
     }
 
     def __init__(self, cfg, token_mgr, logger: logging.Logger):
