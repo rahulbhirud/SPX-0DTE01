@@ -6,14 +6,14 @@ selects the spread with the highest net premium, and submits an
 opening order to the TradeStation order-execution API.
 
 Usage (standalone):
-    python options_trader.py --side call --qty 1
-    python options_trader.py --side put  --qty 1
+    python options_trader.py --side call --qty 2
+    python options_trader.py --side put  --qty 2
 
 Programmatic:
     from options_trader import OptionsTrader
     trader = OptionsTrader(cfg, token_mgr, log)
-    trader.open_call_credit_spread(quantity=1)
-    trader.open_put_credit_spread(quantity=1)
+    trader.open_call_credit_spread()           # uses config default
+    trader.open_put_credit_spread(quantity=3)  # explicit override
 """
 
 from __future__ import annotations
@@ -301,12 +301,15 @@ class OptionsTrader:
     # Public API
     # ──────────────────────────────────────────────────────────
 
-    def open_call_credit_spread(self, quantity: int = 1) -> Optional[Dict[str, Any]]:
+    def open_call_credit_spread(self, quantity: int | None = None) -> Optional[Dict[str, Any]]:
         """Select the call credit spread with the highest premium from
         ``options_data_config.json`` and submit an opening order.
 
         Returns the API response dict on success, or ``None`` on failure.
         """
+        if quantity is None:
+            quantity = self.cfg.options_default_quantity
+
         spreads = self._load_spreads("credit_call_spreads")
         if not spreads:
             self.log.warning("No call credit spreads found in %s", self.DATA_FILE)
@@ -340,12 +343,15 @@ class OptionsTrader:
             self.log.exception("Call credit order unexpected error: %s", exc)
         return None
 
-    def open_put_credit_spread(self, quantity: int = 1) -> Optional[Dict[str, Any]]:
+    def open_put_credit_spread(self, quantity: int | None = None) -> Optional[Dict[str, Any]]:
         """Select the put credit spread with the highest premium from
         ``options_data_config.json`` and submit an opening order.
 
         Returns the API response dict on success, or ``None`` on failure.
         """
+        if quantity is None:
+            quantity = self.cfg.options_default_quantity
+
         spreads = self._load_spreads("credit_put_spreads")
         if not spreads:
             self.log.warning("No put credit spreads found in %s", self.DATA_FILE)
@@ -391,7 +397,8 @@ def main() -> None:
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--side", choices=["call", "put"], required=True,
                         help="Which spread to open: call or put credit")
-    parser.add_argument("--qty", type=int, default=1, help="Number of contracts")
+    parser.add_argument("--qty", type=int, default=None,
+                        help="Number of contracts (default: from config.yaml)")
     args = parser.parse_args()
 
     if not Path(args.config).exists():

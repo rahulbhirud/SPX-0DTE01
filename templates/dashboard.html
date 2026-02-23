@@ -608,7 +608,7 @@
         fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quantity: 1 })
+            body: JSON.stringify({})
         })
         .then(r => r.json().then(body => ({ ok: r.ok, body })))
         .then(({ ok, body }) => {

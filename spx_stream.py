@@ -171,6 +171,10 @@ class Config:
     def options_max_premium(self) -> float:
         return float(self._raw.get("options_scheduler", {}).get("max_premium", 0.60))
 
+    @property
+    def options_default_quantity(self) -> int:
+        return int(self._raw.get("options_scheduler", {}).get("default_quantity", 1))
+
 
 # ══════════════════════════════════════════════════════════════
 # Logging Setup

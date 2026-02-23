@@ -101,10 +101,10 @@ def _get_position_tracker():
 @app.route("/api/open_call_credit", methods=["POST"])
 def api_open_call_credit():
     """Open a call credit spread (max premium from options_data_config.json)."""
-    qty = request.json.get("quantity", 1) if request.is_json else 1
+    qty = request.json.get("quantity") if request.is_json else None
     try:
         trader = _get_trader()
-        resp = trader.open_call_credit_spread(quantity=int(qty))
+        resp = trader.open_call_credit_spread(quantity=int(qty) if qty is not None else None)
         if resp is None:
             return jsonify({"success": False, "message": "No valid call credit spread available or order failed. Check logs."}), 400
         return jsonify({"success": True, "message": "Call credit spread order submitted.", "order": resp})
@@ -115,10 +115,10 @@ def api_open_call_credit():
 @app.route("/api/open_put_credit", methods=["POST"])
 def api_open_put_credit():
     """Open a put credit spread (max premium from options_data_config.json)."""
-    qty = request.json.get("quantity", 1) if request.is_json else 1
+    qty = request.json.get("quantity") if request.is_json else None
     try:
         trader = _get_trader()
-        resp = trader.open_put_credit_spread(quantity=int(qty))
+        resp = trader.open_put_credit_spread(quantity=int(qty) if qty is not None else None)
         if resp is None:
             return jsonify({"success": False, "message": "No valid put credit spread available or order failed. Check logs."}), 400
         return jsonify({"success": True, "message": "Put credit spread order submitted.", "order": resp})
