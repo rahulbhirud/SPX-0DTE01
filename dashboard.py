@@ -84,6 +84,20 @@ def _get_order_tracker():
     return app._order_tracker
 
 
+def _get_position_tracker():
+    """Lazily build a PositionTracker using the same shared config/token setup."""
+    if not hasattr(app, "_position_tracker"):
+        from spx_stream import Config, TokenManager, setup_logging
+        from position_tracker import PositionTracker
+
+        config_path = os.environ.get("SPX_CONFIG", "config.yaml")
+        cfg = Config(config_path)
+        log = setup_logging(cfg)
+        token_mgr = TokenManager(cfg, log)
+        app._position_tracker = PositionTracker(cfg, token_mgr, log)
+    return app._position_tracker
+
+
 @app.route("/api/open_call_credit", methods=["POST"])
 def api_open_call_credit():
     """Open a call credit spread (max premium from options_data_config.json)."""
@@ -119,6 +133,31 @@ def api_open_orders():
         tracker = _get_order_tracker()
         orders = tracker.get_open_orders()
         return jsonify({"success": True, "orders": orders})
+    except Exception as exc:
+        return jsonify({"success": False, "message": str(exc)}), 500
+
+
+@app.route("/api/open_positions", methods=["GET"])
+def api_open_positions():
+    """Return open credit spreads with live P&L."""
+    try:
+        tracker = _get_position_tracker()
+        spreads = tracker.get_open_spreads()
+        result = []
+        for s in spreads:
+            result.append({
+                "spread_type": s.spread_type,
+                "short_strike": s.short_strike,
+                "long_strike": s.long_strike,
+                "contracts": s.contracts,
+                "short_symbol": s.short_symbol,
+                "long_symbol": s.long_symbol,
+                "short_delta": s.short_delta,
+                "credit_received": s.credit_received,
+                "current_cost": s.current_cost,
+                "open_pnl": s.open_pnl,
+            })
+        return jsonify({"success": True, "spreads": result})
     except Exception as exc:
         return jsonify({"success": False, "message": str(exc)}), 500
 

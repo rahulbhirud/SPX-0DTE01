@@ -346,6 +346,89 @@
         .limit-price-negative { color: var(--red); }
         .limit-price-positive { color: var(--green); }
         .limit-price-neutral { color: var(--muted); }
+
+        /* ── Open Positions Section ─────────────────── */
+        .positions-section {
+            margin-bottom: 24px;
+        }
+
+        .positions-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .positions-title {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .positions-refresh-badge {
+            font-size: 10px;
+            color: var(--muted);
+            letter-spacing: 0.5px;
+        }
+
+        .positions-empty {
+            font-size: 13px;
+            color: var(--muted);
+            padding: 16px 0;
+        }
+
+        .positions-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .positions-table th,
+        .positions-table td {
+            border-bottom: 1px solid var(--border);
+            padding: 10px 8px;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .positions-table th {
+            color: var(--muted);
+            font-size: 11px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            background: var(--card);
+        }
+
+        .positions-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .positions-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: var(--amber);
+        }
+
+        .pnl-positive { color: var(--green); font-weight: 700; }
+        .pnl-negative { color: var(--red); font-weight: 700; }
+        .pnl-zero     { color: var(--muted); }
+
+        .total-pnl-row td {
+            font-weight: 700;
+            font-size: 13px;
+            border-top: 2px solid var(--border);
+            border-bottom: none;
+            padding-top: 12px;
+        }
     </style>
 </head>
 <body>
@@ -388,6 +471,32 @@
     <button class="trade-btn btn-orders" id="btn-view-orders" onclick="openOrdersModal()" title="View Open Orders">☰</button>
 </div>
 <div class="trade-status" id="trade-status"></div>
+
+<!-- ── Open Positions Section ─────────────────────────── -->
+<div class="positions-section">
+    <div class="positions-header">
+        <span class="positions-title">Open Positions</span>
+        <span class="positions-refresh-badge" id="positions-updated"></span>
+    </div>
+    <div class="positions-card">
+        <div class="positions-empty" id="positions-empty">Loading positions…</div>
+        <table class="positions-table" id="positions-table" style="display:none;">
+            <thead>
+            <tr>
+                <th>#</th>
+                <th>Spread</th>
+                <th>Strikes</th>
+                <th>Contracts</th>
+                <th>Credit</th>
+                <th>Cost to Close</th>
+                <th>Open P&amp;L</th>
+                <th>Short &#916;</th>
+            </tr>
+            </thead>
+            <tbody id="positions-tbody"></tbody>
+        </table>
+    </div>
+</div>
 
 <div class="modal-overlay" id="orders-modal-overlay" onclick="overlayClose(event)">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="orders-modal-title">
@@ -782,6 +891,89 @@
                 messageEl.textContent = 'Open orders load error: ' + err.message;
             });
     }
+
+    // ── Open Positions auto-refresh ────────────────────
+    const POSITIONS_POLL = 5000; // 5 seconds
+
+    function pnlClass(val) {
+        if (val > 0) return 'pnl-positive';
+        if (val < 0) return 'pnl-negative';
+        return 'pnl-zero';
+    }
+
+    function loadPositions() {
+        fetch('/api/open_positions')
+            .then(r => r.json().then(body => ({ ok: r.ok, body })))
+            .then(({ ok, body }) => {
+                const emptyEl = document.getElementById('positions-empty');
+                const tableEl = document.getElementById('positions-table');
+                const tbody   = document.getElementById('positions-tbody');
+                const badge   = document.getElementById('positions-updated');
+
+                const now = new Date().toLocaleTimeString('en-US', {
+                    timeZone: 'America/New_York',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: true
+                });
+                badge.textContent = 'Updated ' + now + ' EST';
+
+                if (!ok || !body.success) {
+                    emptyEl.textContent = body.message || 'Failed to load positions.';
+                    emptyEl.style.display = 'block';
+                    tableEl.style.display = 'none';
+                    return;
+                }
+
+                const spreads = Array.isArray(body.spreads) ? body.spreads : [];
+                if (spreads.length === 0) {
+                    emptyEl.textContent = 'No open positions.';
+                    emptyEl.style.display = 'block';
+                    tableEl.style.display = 'none';
+                    return;
+                }
+
+                emptyEl.style.display = 'none';
+                tableEl.style.display = 'table';
+                tbody.innerHTML = '';
+
+                let totalPnl = 0;
+
+                spreads.forEach((s, i) => {
+                    totalPnl += s.open_pnl;
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${i + 1}</td>
+                        <td>${s.spread_type || '\u2014'}</td>
+                        <td>${s.short_strike}/${s.long_strike}</td>
+                        <td>${s.contracts}</td>
+                        <td>$${s.credit_received.toFixed(2)}</td>
+                        <td>$${s.current_cost.toFixed(2)}</td>
+                        <td class="${pnlClass(s.open_pnl)}">$${s.open_pnl.toFixed(2)}</td>
+                        <td>${s.short_delta.toFixed(4)}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                // Total P&L row
+                const totalRow = document.createElement('tr');
+                totalRow.className = 'total-pnl-row';
+                totalRow.innerHTML = `
+                    <td colspan="6" style="text-align:right;">Total P&amp;L</td>
+                    <td class="${pnlClass(totalPnl)}">$${totalPnl.toFixed(2)}</td>
+                    <td></td>
+                `;
+                tbody.appendChild(totalRow);
+            })
+            .catch(err => {
+                document.getElementById('positions-empty').textContent = 'Error: ' + err.message;
+                document.getElementById('positions-empty').style.display = 'block';
+                document.getElementById('positions-table').style.display = 'none';
+            });
+    }
+
+    // Initial load + 5s poll
+    loadPositions();
+    setInterval(loadPositions, POSITIONS_POLL);
 
     function cancelOrder(orderId, btn) {
         const messageEl = document.getElementById('orders-message');
