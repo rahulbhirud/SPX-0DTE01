@@ -598,6 +598,7 @@ class SPXStreamer:
     """
 
     _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard_state.json")
+    _STREAM_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stream_data")
 
     def __init__(self, cfg: Config, token_mgr: TokenManager, logger: logging.Logger):
         self.cfg       = cfg
@@ -607,6 +608,31 @@ class SPXStreamer:
         self._response = None          # active streaming response (for clean shutdown)
         self._rsi      = RSIAnalyzer(cfg, logger)
         self._shutdown_event = threading.Event()  # For interruptible sleeps
+
+        # Reversal detection — runs after each closed bar
+        from collections import deque as _deque
+        from reversal_detector import ReversalDetector, Candle as RCandle
+        self._reversal_detector = ReversalDetector(
+            stream_data_dir=self._STREAM_DATA_DIR, logger=logger,
+        )
+        self._RCandle = RCandle
+        self._reversal_candles: _deque = _deque(maxlen=24)  # capped rolling buffer
+        self._reversal_result: dict = {"signal": False, "phase": "none", "direction": None}
+        self._last_bar_ts: Optional[str] = None  # tracks bar-close boundaries
+
+        # ── Signal lifecycle state machine ──
+        # States: TRENDING → BUILDING → ACTIVE → RESOLVED → cooldown → TRENDING
+        self._signal_state: str = "TRENDING"   # TRENDING | BUILDING | ACTIVE | HIT_TARGET | STOPPED_OUT
+        self._signal_entry: Optional[float]  = None
+        self._signal_stop: Optional[float]   = None
+        self._signal_target: Optional[float] = None
+        self._signal_direction: Optional[str] = None
+        self._signal_score: Optional[int]    = None
+        self._signal_detail: str             = ""
+        self._cooldown_bars: int             = 0  # bars remaining in cooldown
+
+        # ── Reversal event log (current session) ──
+        self._reversal_log: list = []  # list of dicts with EST timestamp + event info
 
     # ──────────────────────────────────────────────────────────
     # Candle handler
@@ -628,6 +654,11 @@ class SPXStreamer:
             ts, o, h, l, c, vol, status.upper(), self._rsi.rsi_status_str(),
         )
 
+        # ── Persist candle to daily JSON file ────────────────
+        self._save_candle_to_daily_json(candle)
+
+        # ── Check for bar close and run reversal detection ───
+        self._check_reversal(candle)
 
         # ── Update dashboard state file ──────────────────────
         self._write_dashboard_state(c, ts)
@@ -635,6 +666,161 @@ class SPXStreamer:
     # ──────────────────────────────────────────────────────────
     # Dashboard State Writer
     # ──────────────────────────────────────────────────────────
+
+    def _log_reversal_event(self, event: str, direction: str = None, **kwargs) -> None:
+        """Append a timestamped entry to the session reversal log."""
+        import datetime as _dt
+        est = _dt.timezone(_dt.timedelta(hours=-5), "EST")
+        now_est = _dt.datetime.now(est).strftime("%I:%M:%S %p")
+        entry = {"time": now_est, "event": event}
+        if direction:
+            entry["direction"] = direction.upper()
+        entry.update(kwargs)
+        self._reversal_log.append(entry)
+        # Cap at 50 entries per session
+        if len(self._reversal_log) > 50:
+            self._reversal_log = self._reversal_log[-50:]
+
+    def _check_reversal(self, candle: dict) -> None:
+        """Detect bar close and run reversal detector with lifecycle tracking."""
+        ts     = candle.get("TimeStamp", "")
+        status = candle.get("Status", "").lower()
+        is_closed = status in ("closed", "historical")
+
+        # ── Live-tick stop/target tracking while ACTIVE ──────
+        if self._signal_state == "ACTIVE":
+            try:
+                live_price = float(candle.get("Close", 0))
+            except (TypeError, ValueError):
+                live_price = None
+
+            if live_price and self._signal_direction == "bull":
+                if self._signal_target and live_price >= self._signal_target:
+                    self._signal_state = "HIT_TARGET"
+                    self._cooldown_bars = 3
+                    self.log.info("🎯 REVERSAL HIT TARGET — bull target %.2f reached (price %.2f)",
+                                  self._signal_target, live_price)
+                    self._log_reversal_event("HIT_TARGET", "bull", price=f"{live_price:.2f}", target=f"{self._signal_target:.2f}")
+                elif self._signal_stop and live_price <= self._signal_stop:
+                    self._signal_state = "STOPPED_OUT"
+                    self._cooldown_bars = 3
+                    self.log.info("🛑 REVERSAL STOPPED OUT — bull stop %.2f hit (price %.2f)",
+                                  self._signal_stop, live_price)
+                    self._log_reversal_event("STOPPED_OUT", "bull", price=f"{live_price:.2f}", stop=f"{self._signal_stop:.2f}")
+            elif live_price and self._signal_direction == "bear":
+                if self._signal_target and live_price <= self._signal_target:
+                    self._signal_state = "HIT_TARGET"
+                    self._cooldown_bars = 3
+                    self.log.info("🎯 REVERSAL HIT TARGET — bear target %.2f reached (price %.2f)",
+                                  self._signal_target, live_price)
+                    self._log_reversal_event("HIT_TARGET", "bear", price=f"{live_price:.2f}", target=f"{self._signal_target:.2f}")
+                elif self._signal_stop and live_price >= self._signal_stop:
+                    self._signal_state = "STOPPED_OUT"
+                    self._cooldown_bars = 3
+                    self.log.info("🛑 REVERSAL STOPPED OUT — bear stop %.2f hit (price %.2f)",
+                                  self._signal_stop, live_price)
+                    self._log_reversal_event("STOPPED_OUT", "bear", price=f"{live_price:.2f}", stop=f"{self._signal_stop:.2f}")
+
+        # Detect implicit close: timestamp changed → previous bar closed
+        bar_just_closed = (
+            not is_closed
+            and self._last_bar_ts is not None
+            and ts != self._last_bar_ts
+        )
+
+        if is_closed or bar_just_closed:
+            # Build a Candle from the current tick and append
+            try:
+                rc = self._RCandle(
+                    open=float(candle.get("Open", 0)),
+                    high=float(candle.get("High", 0)),
+                    low=float(candle.get("Low", 0)),
+                    close=float(candle.get("Close", 0)),
+                    timestamp=ts,
+                )
+                self._reversal_candles.append(rc)
+            except (TypeError, ValueError):
+                pass
+
+            # ── Cooldown: count down after HIT_TARGET / STOPPED_OUT ──
+            if self._signal_state in ("HIT_TARGET", "STOPPED_OUT"):
+                self._cooldown_bars -= 1
+                if self._cooldown_bars <= 0:
+                    self._signal_state = "TRENDING"
+                    self._signal_entry = None
+                    self._signal_stop  = None
+                    self._signal_target = None
+                    self._signal_direction = None
+                    self._signal_score = None
+                    self._signal_detail = ""
+                    self.log.debug("Reversal cooldown finished → TRENDING")
+                self._last_bar_ts = ts
+                return  # skip detection during cooldown
+
+            # ── Run detection when we have enough candles ────
+            if len(self._reversal_candles) >= 8:
+                from reversal_detector import detect_reversal
+                result = detect_reversal(list(self._reversal_candles))
+                self._reversal_result = result
+
+                phase     = result.get("phase", "none")
+                direction = result.get("direction")
+                signal    = result.get("signal", False)
+
+                if signal and phase == "triggered" and self._signal_state != "ACTIVE":
+                    # ── Upgrade to ACTIVE with trade levels ──
+                    self._signal_state     = "ACTIVE"
+                    self._signal_direction = direction
+                    self._signal_entry     = result.get("entry")
+                    self._signal_stop      = result.get("stop")
+                    self._signal_target    = result.get("target")
+                    self._signal_score     = result.get("score")
+                    self._signal_detail    = result.get("details", {}).get("pattern", "")
+                    self.log.info(
+                        "🔄 REVERSAL ACTIVE %s | %s | entry=%.2f stop=%.2f target=%.2f R:R=%s",
+                        direction.upper(), self._signal_detail,
+                        self._signal_entry or 0, self._signal_stop or 0,
+                        self._signal_target or 0, result.get("rr_ratio", "?"),
+                    )
+                    self._log_reversal_event(
+                        "ACTIVE", direction,
+                        pattern=self._signal_detail,
+                        entry=f"{self._signal_entry:.2f}" if self._signal_entry else "—",
+                        stop=f"{self._signal_stop:.2f}" if self._signal_stop else "—",
+                        target=f"{self._signal_target:.2f}" if self._signal_target else "—",
+                        rr=result.get("rr_ratio", "?"),
+                    )
+                elif signal and phase == "building" and self._signal_state == "TRENDING":
+                    # ── Early warning: exhaustion building ──
+                    self._signal_state     = "BUILDING"
+                    self._signal_direction = direction
+                    self._signal_score     = result.get("score")
+                    self._signal_detail    = result.get("details", {}).get("pattern", "")
+                    self._signal_entry     = None
+                    self._signal_stop      = None
+                    self._signal_target    = None
+                    self.log.info(
+                        "⚠️  REVERSAL BUILDING %s | %s | score=%s",
+                        direction.upper(), self._signal_detail, self._signal_score,
+                    )
+                    self._log_reversal_event(
+                        "BUILDING", direction,
+                        pattern=self._signal_detail,
+                        score=f"{self._signal_score}",
+                    )
+                elif not signal and self._signal_state == "BUILDING":
+                    # Exhaustion faded before trigger → back to TRENDING
+                    self._log_reversal_event("FADED", self._signal_direction, detail="Building faded")
+                    self._signal_state = "TRENDING"
+                    self._signal_direction = None
+                    self._signal_score = None
+                    self._signal_detail = ""
+                    self.log.debug("Reversal building faded → TRENDING")
+                elif not signal and self._signal_state == "TRENDING":
+                    self.log.debug("Reversal check: no signal (bull=%s bear=%s)",
+                                   result.get("bull_score", "-"), result.get("bear_score", "-"))
+
+        self._last_bar_ts = ts
 
     def _write_dashboard_state(self, price, timestamp):
         """Write current state to a JSON file for the dashboard UI."""
@@ -645,12 +831,39 @@ class SPXStreamer:
         rsi_val = self._rsi.current_rsi()
         rsi_display = round(rsi_val, 2) if rsi_val is not None else None
 
+        # Reversal status for dashboard — uses lifecycle state machine
+        sig_state = self._signal_state   # TRENDING | BUILDING | ACTIVE | HIT_TARGET | STOPPED_OUT
+        rev       = self._reversal_result
+
+        reversal_status    = sig_state
+        reversal_direction = self._signal_direction
+        reversal_detail    = self._signal_detail
+        reversal_entry     = self._signal_entry
+        reversal_stop      = self._signal_stop
+        reversal_target    = self._signal_target
+        reversal_rr        = rev.get("rr_ratio") if sig_state == "ACTIVE" else None
+        reversal_score     = (
+            f"{self._signal_score}/{rev.get('max_score', 6)}"
+            if self._signal_score is not None else None
+        )
+        reversal_phase     = rev.get("phase", "none")
+
         state = {
             "price": str(price),
             "rsi": rsi_display,
             "rsi_period": self._rsi._period,
             "timestamp": timestamp,
             "updated_at": now_est,
+            "reversal_status": reversal_status,
+            "reversal_direction": reversal_direction,
+            "reversal_detail": reversal_detail,
+            "reversal_entry": reversal_entry,
+            "reversal_stop": reversal_stop,
+            "reversal_target": reversal_target,
+            "reversal_rr": reversal_rr,
+            "reversal_score": reversal_score,
+            "reversal_phase": reversal_phase,
+            "reversal_log": self._reversal_log,
         }
         try:
             tmp = self._STATE_FILE + ".tmp"
@@ -659,6 +872,57 @@ class SPXStreamer:
             os.replace(tmp, self._STATE_FILE)
         except Exception:
             pass  # Non-critical; don't disrupt streaming
+
+    # ──────────────────────────────────────────────────────────
+    # Daily candle persistence
+    # ──────────────────────────────────────────────────────────
+
+    def _save_candle_to_daily_json(self, candle: dict) -> None:
+        """Append a candle record to the day's JSON file under stream_data/."""
+        import datetime as _dt
+
+        ts_str = candle.get("TimeStamp", "")
+        try:
+            # Parse the ISO-8601 timestamp to derive the date
+            dt = _dt.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            date_key = dt.strftime("%Y-%m-%d")
+        except (ValueError, AttributeError):
+            date_key = _dt.datetime.now(
+                _dt.timezone(_dt.timedelta(hours=-5), "EST")
+            ).strftime("%Y-%m-%d")
+
+        os.makedirs(self._STREAM_DATA_DIR, exist_ok=True)
+        filepath = os.path.join(self._STREAM_DATA_DIR, f"{date_key}.json")
+
+        # Build the record to persist
+        rsi_val = self._rsi.current_rsi()
+        record = {
+            "TimeStamp":   candle.get("TimeStamp", ""),
+            "Open":        candle.get("Open", ""),
+            "High":        candle.get("High", ""),
+            "Low":         candle.get("Low", ""),
+            "Close":       candle.get("Close", ""),
+            "TotalVolume": candle.get("TotalVolume", ""),
+            "Status":      candle.get("Status", ""),
+            "RSI":         round(rsi_val, 4) if rsi_val is not None else None,
+        }
+
+        try:
+            # Read existing array, append, rewrite
+            if os.path.exists(filepath):
+                with open(filepath, "r") as f:
+                    data = json.load(f)
+            else:
+                data = []
+
+            data.append(record)
+
+            tmp = filepath + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, filepath)
+        except Exception as e:
+            self.log.warning("Failed to save candle to %s: %s", filepath, e)
 
     def on_heartbeat(self):
         self.log.debug("♥ heartbeat")

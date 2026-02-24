@@ -90,6 +90,8 @@
 
         .card-price::before { background: var(--blue); }
         .card-rsi::before { background: var(--purple); }
+        .card-reversal::before { background: var(--amber); }
+        .card-reversal.reversal-active::before { background: var(--green); }
 
         .card-label {
             font-size: 12px;
@@ -142,6 +144,115 @@
         .rsi-oversold { color: var(--green); }
         .rsi-overbought { color: var(--red); }
         .rsi-neutral { color: var(--text); }
+
+        /* ── Reversal Status Card ─────────────────── */
+        .reversal-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+        .reversal-badge.trending {
+            background: rgba(139, 143, 163, 0.15);
+            color: var(--muted);
+        }
+        .reversal-badge.bull {
+            background: rgba(34, 197, 94, 0.18);
+            color: var(--green);
+        }
+        .reversal-badge.bear {
+            background: rgba(239, 68, 68, 0.18);
+            color: var(--red);
+        }
+        .reversal-badge.building {
+            background: rgba(250, 204, 21, 0.18);
+            color: #facc15;
+            animation: pulse-building 1.5s ease-in-out infinite;
+        }
+        .reversal-badge.active {
+            background: rgba(168, 85, 247, 0.22);
+            color: var(--purple);
+            animation: pulse-active 1s ease-in-out infinite;
+        }
+        .reversal-badge.hit-target {
+            background: rgba(34, 197, 94, 0.25);
+            color: #4ade80;
+        }
+        .reversal-badge.stopped-out {
+            background: rgba(239, 68, 68, 0.25);
+            color: #f87171;
+        }
+        @keyframes pulse-building {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.6; }
+        }
+        @keyframes pulse-active {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4); opacity: 1; }
+            50%      { box-shadow: 0 0 12px 4px rgba(168, 85, 247, 0.15); opacity: 0.85; }
+        }
+        .reversal-details {
+            font-size: 11px;
+            color: var(--muted);
+            margin-top: 8px;
+            line-height: 1.6;
+        }
+
+        /* ── Reversal Event Log ───────────────── */
+        .reversal-log-section {
+            margin-bottom: 24px;
+        }
+        .reversal-log-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--muted);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        .reversal-log-wrap {
+            background: var(--card);
+            border-radius: 14px;
+            padding: 16px;
+            max-height: 260px;
+            overflow-y: auto;
+        }
+        .reversal-log-empty {
+            font-size: 12px;
+            color: var(--muted);
+            text-align: center;
+            padding: 12px 0;
+        }
+        .reversal-log-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .reversal-log-table th {
+            text-align: left;
+            color: var(--muted);
+            font-weight: 600;
+            padding: 4px 8px;
+            border-bottom: 1px solid rgba(139, 143, 163, 0.15);
+        }
+        .reversal-log-table td {
+            padding: 5px 8px;
+            border-bottom: 1px solid rgba(139, 143, 163, 0.07);
+            color: var(--text);
+        }
+        .log-event-building  { color: #facc15; }
+        .log-event-active    { color: var(--purple); }
+        .log-event-hit       { color: #4ade80; }
+        .log-event-stopped   { color: #f87171; }
+        .log-event-faded     { color: var(--muted); }
+        .log-dir-bull { color: var(--green); }
+        .log-dir-bear { color: var(--red); }
+
+        .reversal-details span {
+            margin-right: 12px;
+        }
 
         /* ── Trade Buttons ──────────────────────────── */
         .trade-row {
@@ -488,6 +599,38 @@
     </div>
 </div>
 
+<!-- ── Reversal Status Card ────────────────────────────── -->
+<div class="cards" style="margin-bottom: 24px;">
+    <div class="card card-reversal" id="reversal-card" style="grid-column: 1 / -1;">
+        <div class="card-label">Price Action — Reversal Detector</div>
+        <div id="reversal-status">
+            <span class="reversal-badge trending" id="reversal-badge">TRENDING</span>
+        </div>
+        <div class="reversal-details" id="reversal-details" style="display:none;">
+            <span id="rev-pattern"></span>
+            <span id="rev-score"></span>
+            <span id="rev-entry"></span>
+            <span id="rev-stop"></span>
+            <span id="rev-target"></span>
+            <span id="rev-rr"></span>
+        </div>
+    </div>
+</div>
+
+<!-- ── Reversal Event Log ──────────────────────────────── -->
+<div class="reversal-log-section">
+    <div class="reversal-log-title">Reversal Event Log (Today)</div>
+    <div class="reversal-log-wrap">
+        <div class="reversal-log-empty" id="reversal-log-empty">No reversal events yet today.</div>
+        <table class="reversal-log-table" id="reversal-log-table" style="display:none;">
+            <thead>
+                <tr><th>Time (EST)</th><th>Event</th><th>Direction</th><th>Details</th></tr>
+            </thead>
+            <tbody id="reversal-log-body"></tbody>
+        </table>
+    </div>
+</div>
+
 <div class="trade-row">
     <button class="trade-btn btn-call" id="btn-open-call" onclick="openSpread('call')" title="Open Call Credit Spread">▲</button>
     <button class="trade-btn btn-put" id="btn-open-put" onclick="openSpread('put')" title="Open Put Credit Spread">▼</button>
@@ -610,6 +753,9 @@
                 // Timestamp
                 document.getElementById('updated-at').textContent = data.updated_at;
 
+                // ── Reversal Status ──────────────────────
+                updateReversalCard(data);
+
                 // Pulse animation
                 document.getElementById('pulse').style.background = '#22c55e';
             })
@@ -619,6 +765,106 @@
     }
 
     setInterval(update, POLL_INTERVAL);
+
+    // ── Reversal event log renderer ─────────────
+    function updateReversalLog(data) {
+        const log   = data.reversal_log || [];
+        const empty = document.getElementById('reversal-log-empty');
+        const table = document.getElementById('reversal-log-table');
+        const tbody = document.getElementById('reversal-log-body');
+        if (!log.length) {
+            empty.style.display = 'block';
+            table.style.display = 'none';
+            return;
+        }
+        empty.style.display = 'none';
+        table.style.display = 'table';
+        // Build rows (newest first)
+        const rows = log.slice().reverse().map(e => {
+            const evtClass = e.event === 'BUILDING' ? 'log-event-building'
+                           : e.event === 'ACTIVE'   ? 'log-event-active'
+                           : e.event === 'HIT_TARGET' ? 'log-event-hit'
+                           : e.event === 'STOPPED_OUT' ? 'log-event-stopped'
+                           : 'log-event-faded';
+            const dirClass = e.direction === 'BULL' ? 'log-dir-bull'
+                           : e.direction === 'BEAR' ? 'log-dir-bear' : '';
+            // Build detail string from extra keys
+            const skip = new Set(['time','event','direction']);
+            const details = Object.entries(e)
+                .filter(([k]) => !skip.has(k))
+                .map(([k,v]) => k + ': ' + v)
+                .join(' \u2502 ');
+            return '<tr>'
+                + '<td>' + e.time + '</td>'
+                + '<td class="' + evtClass + '">' + e.event + '</td>'
+                + '<td class="' + dirClass + '">' + (e.direction || '\u2014') + '</td>'
+                + '<td>' + (details || '\u2014') + '</td>'
+                + '</tr>';
+        }).join('');
+        tbody.innerHTML = rows;
+    }
+
+    // ── Reversal card updater ───────────────────────
+    function updateReversalCard(data) {
+        const badge   = document.getElementById('reversal-badge');
+        const details = document.getElementById('reversal-details');
+        const card    = document.getElementById('reversal-card');
+        const status  = data.reversal_status || 'TRENDING';
+        const dir     = data.reversal_direction;
+
+        badge.className = 'reversal-badge';
+        card.classList.remove('reversal-active');
+
+        const fmt = v => v !== null && v !== undefined ? Number(v).toFixed(2) : '—';
+
+        if (status === 'ACTIVE') {
+            badge.textContent = 'ACTIVE — ' + (dir || '').toUpperCase() + ' REVERSAL';
+            badge.classList.add('active');
+            card.classList.add('reversal-active');
+            details.style.display = 'block';
+            document.getElementById('rev-pattern').textContent = (data.reversal_detail || '').replaceAll('_', ' ').toUpperCase();
+            document.getElementById('rev-score').textContent   = 'Score: ' + (data.reversal_score || '—');
+            document.getElementById('rev-entry').textContent   = 'Entry: '  + fmt(data.reversal_entry);
+            document.getElementById('rev-stop').textContent    = 'Stop: '   + fmt(data.reversal_stop);
+            document.getElementById('rev-target').textContent  = 'Target: ' + fmt(data.reversal_target);
+            document.getElementById('rev-rr').textContent      = 'R:R: '    + fmt(data.reversal_rr) + ':1';
+        } else if (status === 'BUILDING') {
+            badge.textContent = 'BUILDING — ' + (dir || '').toUpperCase() + ' EXHAUSTION';
+            badge.classList.add('building');
+            details.style.display = 'block';
+            document.getElementById('rev-pattern').textContent = (data.reversal_detail || '').replaceAll('_', ' ').toUpperCase();
+            document.getElementById('rev-score').textContent   = 'Score: ' + (data.reversal_score || '—');
+            document.getElementById('rev-entry').textContent   = 'Awaiting trigger…';
+            document.getElementById('rev-stop').textContent    = '';
+            document.getElementById('rev-target').textContent  = '';
+            document.getElementById('rev-rr').textContent      = '';
+        } else if (status === 'HIT_TARGET') {
+            badge.textContent = '✅ HIT TARGET — ' + (dir || '').toUpperCase();
+            badge.classList.add('hit-target');
+            details.style.display = 'block';
+            document.getElementById('rev-pattern').textContent = (data.reversal_detail || '').replaceAll('_', ' ').toUpperCase();
+            document.getElementById('rev-score').textContent   = 'Score: ' + (data.reversal_score || '—');
+            document.getElementById('rev-entry').textContent   = 'Entry: '  + fmt(data.reversal_entry);
+            document.getElementById('rev-stop').textContent    = '';
+            document.getElementById('rev-target').textContent  = 'Target: ' + fmt(data.reversal_target) + ' ✓';
+            document.getElementById('rev-rr').textContent      = '';
+        } else if (status === 'STOPPED_OUT') {
+            badge.textContent = '🛑 STOPPED OUT — ' + (dir || '').toUpperCase();
+            badge.classList.add('stopped-out');
+            details.style.display = 'block';
+            document.getElementById('rev-pattern').textContent = (data.reversal_detail || '').replaceAll('_', ' ').toUpperCase();
+            document.getElementById('rev-score').textContent   = '';
+            document.getElementById('rev-entry').textContent   = 'Entry: '  + fmt(data.reversal_entry);
+            document.getElementById('rev-stop').textContent    = 'Stop: '   + fmt(data.reversal_stop) + ' ✗';
+            document.getElementById('rev-target').textContent  = '';
+            document.getElementById('rev-rr').textContent      = '';
+        } else {
+            // TRENDING (default)
+            badge.textContent = 'TRENDING';
+            badge.classList.add('trending');
+            details.style.display = 'none';
+        }
+    }
 
     // ── Trade button handlers ───────────────────────
     function openSpread(side) {
