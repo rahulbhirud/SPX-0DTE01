@@ -530,8 +530,27 @@
         }
 
         /* ── TradingView Chart ───────────────────── */
-        .tv-wrap { height: 600px; margin-bottom: 24px; }
-        #tv_chart { height: 100%; }
+        .tv-wrap { margin-bottom: 24px; }
+        .tv-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .tv-controls select,
+        .tv-controls button {
+            font-family: inherit;
+            font-size: 12px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--text);
+            cursor: pointer;
+        }
+        .tv-controls button:hover { border-color: var(--blue); color: var(--blue); }
+        .tv-controls .tv-status { font-size: 11px; color: var(--muted); margin-left: auto; }
+        #tv_container { height: 600px; }
 
         .pnl-positive { color: var(--green); font-weight: 700; }
         .pnl-negative { color: var(--red); font-weight: 700; }
@@ -638,11 +657,30 @@
 </div>
 <div class="trade-status" id="trade-status"></div>
 
-<!-- ── TradingView Chart (hidden) ──────────────────────── -->
-<div class="tv-wrap" style="display:none;">
-    <div id="tv_chart"></div>
+<!-- ── TradingView Chart ────────────────────────────────── 
+<div class="tv-wrap">
+    <div class="tv-controls">
+        <select id="symbol">
+            <option value="SP:SPX" selected>SPX</option>
+            <option value="AMEX:SPY">SPY</option>
+            <option value="NASDAQ:QQQ">QQQ</option>
+            <option value="CBOE:VIX">VIX</option>
+        </select>
+        <select id="interval">
+            <option value="1">1m</option>
+            <option value="3">3m</option>
+            <option value="5" selected>5m</option>
+            <option value="15">15m</option>
+            <option value="30">30m</option>
+            <option value="60">1h</option>
+            <option value="D">1D</option>
+        </select>
+        <button id="reload">&#x21bb; Reload</button>
+        <span class="tv-status" id="status"></span>
+    </div>
+    <div id="tv_container"></div>
 </div>
-
+-->
 <!-- ── Open Positions Section ─────────────────────────── -->
 <div class="positions-section">
     <div class="positions-header">
@@ -1331,25 +1369,48 @@
     }
 </script>
 
-<!-- TradingView widget hidden for now
-<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-<script type="text/javascript">
-  new TradingView.widget({
-    autosize: true,
-    symbol: "SP:SPX",
-    interval: "5",
-    timezone: "America/New_York",
-    theme: "dark",
-    style: "1",
-    locale: "en",
-    enable_publishing: false,
-    allow_symbol_change: true,
-    withdateranges: true,
-    hide_side_toolbar: false,
-    container_id: "tv_chart"
-  });
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>
+    let tvWidget = null;
+
+    function loadWidget() {
+        const symbol   = document.getElementById('symbol').value;
+        const interval = document.getElementById('interval').value;
+        const container = document.getElementById('tv_container');
+        container.innerHTML = '';
+        document.getElementById('status').textContent = 'Loading ' + symbol + ' @ ' + interval + '…';
+
+        try {
+            tvWidget = new TradingView.widget({
+                autosize: true,
+                symbol: symbol,
+                interval: interval,
+                timezone: 'America/New_York',
+                theme: 'dark',
+                style: '1',
+                locale: 'en',
+                enable_publishing: false,
+                allow_symbol_change: true,
+                withdateranges: true,
+                hide_side_toolbar: false,
+                studies: [
+                    'Volume@tv-basicstudies',
+                    'RSI@tv-basicstudies'
+                ],
+                container_id: 'tv_container'
+            });
+            document.getElementById('status').textContent = '';
+        } catch (e) {
+            document.getElementById('status').textContent = 'Failed to initialize widget (check console).';
+            console.error(e);
+        }
+    }
+
+    document.getElementById('reload').addEventListener('click', loadWidget);
+    document.getElementById('symbol').addEventListener('change', loadWidget);
+    document.getElementById('interval').addEventListener('change', loadWidget);
+    loadWidget();
 </script>
--->
 
 </body>
 </html>

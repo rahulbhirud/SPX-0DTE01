@@ -49,6 +49,8 @@ class PositionLeg:
     trade_action: str       # "BUY" | "SELL" (inferred from qty sign)
     avg_price: float        # average fill price
     last_price: float       # current mark / last
+    bid: float              # current bid price
+    ask: float              # current ask price
     market_value: float
     opened_dt: str          # truncated timestamp used for grouping
     delta: float
@@ -66,7 +68,7 @@ class CreditSpread:
     long_symbol: str
     short_delta: float
     credit_received: float   # net premium collected per spread
-    current_cost: float      # net cost to close now (short_last − long_last)
+    current_cost: float      # net cost to close now (short_ask − long_bid)
     open_pnl: float          # credit_received − current_cost  (per spread × contracts)
     short_leg: PositionLeg
     long_leg: PositionLeg
@@ -215,6 +217,14 @@ class PositionTracker:
             or pos.get("LastPrice") or pos.get("lastPrice")
             or pos.get("MarketValue") or pos.get("marketValue")
         )
+        bid = _safe_float(
+            pos.get("Bid") or pos.get("bid")
+            or pos.get("BidPrice") or pos.get("bidPrice")
+        )
+        ask = _safe_float(
+            pos.get("Ask") or pos.get("ask")
+            or pos.get("AskPrice") or pos.get("askPrice")
+        )
         market_value = _safe_float(
             pos.get("MarketValue") or pos.get("marketValue")
         )
@@ -240,6 +250,8 @@ class PositionTracker:
             trade_action=trade_action,
             avg_price=avg_price,
             last_price=last_price,
+            bid=bid,
+            ask=ask,
             market_value=market_value,
             opened_dt=opened_dt,
             delta=delta,
@@ -289,8 +301,14 @@ class PositionTracker:
             # P&L calculation
             # Credit received = what we sold for − what we bought for (per unit)
             credit_received = abs(short.avg_price) - abs(long.avg_price)
-            # Current cost to close = short_last − long_last
-            current_cost = abs(short.last_price) - abs(long.last_price)
+            # Current cost to close:
+            #   BUY TO CLOSE the short at the ASK (pay more → fills quickly)
+            #   SELL TO CLOSE the long at the BID (receive less → fills quickly)
+            #   cost_to_close = short_ask − long_bid
+            # Fall back to last_price when bid/ask are unavailable (zero).
+            short_close = abs(short.ask) if short.ask > 0 else abs(short.last_price)
+            long_close  = abs(long.bid)  if long.bid  > 0 else abs(long.last_price)
+            current_cost = short_close - long_close
             # Open P&L per spread × contracts
             open_pnl = (credit_received - current_cost) * contracts * 100
 

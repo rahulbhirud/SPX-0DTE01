@@ -122,6 +122,8 @@ class TestMatchSpreads:
             "trade_action": "SELL",
             "avg_price": 3.50,
             "last_price": 2.00,
+            "bid": 1.90,
+            "ask": 2.10,
             "market_value": -200.0,
             "opened_dt": "2026-02-22T14:36",
             "delta": -0.08,
@@ -135,11 +137,13 @@ class TestMatchSpreads:
         short = self._make_leg(
             symbol="SPXW 260223P6780", strike=6780, quantity=-1,
             trade_action="SELL", avg_price=3.50, last_price=2.00,
+            bid=1.90, ask=2.10,
             option_type="PUT", opened_dt="2026-02-22T14:36", delta=-0.08
         )
         long = self._make_leg(
             symbol="SPXW 260223P6750", strike=6750, quantity=1,
             trade_action="BUY", avg_price=2.80, last_price=1.20,
+            bid=1.10, ask=1.30,
             option_type="PUT", opened_dt="2026-02-22T14:36", delta=0.04
         )
         spreads = tracker._match_spreads([short, long])
@@ -152,21 +156,23 @@ class TestMatchSpreads:
         assert s.short_delta == -0.08
         # credit = 3.50 - 2.80 = 0.70
         assert abs(s.credit_received - 0.70) < 0.01
-        # cost to close = 2.00 - 1.20 = 0.80
-        assert abs(s.current_cost - 0.80) < 0.01
-        # P&L = (0.70 - 0.80) * 1 * 100 = -10.0
-        assert abs(s.open_pnl - (-10.0)) < 0.01
+        # cost to close = short_ask - long_bid = 2.10 - 1.10 = 1.00
+        assert abs(s.current_cost - 1.00) < 0.01
+        # P&L = (0.70 - 1.00) * 1 * 100 = -30.0
+        assert abs(s.open_pnl - (-30.0)) < 0.01
 
     def test_call_credit_spread_matched(self, cfg, token_mgr, logger):
         tracker = PositionTracker(cfg, token_mgr, logger)
         short = self._make_leg(
             symbol="SPXW 260223C7000", strike=7000, quantity=-1,
             trade_action="SELL", avg_price=2.00, last_price=1.00,
+            bid=0.90, ask=1.10,
             option_type="CALL", opened_dt="2026-02-22T14:36", delta=-0.05
         )
         long = self._make_leg(
             symbol="SPXW 260223C7020", strike=7020, quantity=1,
             trade_action="BUY", avg_price=1.30, last_price=0.50,
+            bid=0.40, ask=0.60,
             option_type="CALL", opened_dt="2026-02-22T14:36", delta=0.03
         )
         spreads = tracker._match_spreads([short, long])
