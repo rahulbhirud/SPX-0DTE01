@@ -12438,5 +12438,415 @@
     "TotalVolume": "185167",
     "Status": "",
     "RSI": 59.6109
+  },
+  {
+    "TimeStamp": "2026-02-24T19:55:00Z",
+    "Open": "6888.18",
+    "High": "6892.82",
+    "Low": "6888.02",
+    "Close": "6888.22",
+    "TotalVolume": "23240",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:00:00Z",
+    "Open": "6888.23",
+    "High": "6889.47",
+    "Low": "6887.4",
+    "Close": "6887.66",
+    "TotalVolume": "24215",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:05:00Z",
+    "Open": "6887.64",
+    "High": "6889.61",
+    "Low": "6886.4",
+    "Close": "6886.74",
+    "TotalVolume": "24677",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:10:00Z",
+    "Open": "6886.76",
+    "High": "6887.64",
+    "Low": "6884.05",
+    "Close": "6885.07",
+    "TotalVolume": "23721",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:15:00Z",
+    "Open": "6885.01",
+    "High": "6885.26",
+    "Low": "6882.47",
+    "Close": "6883.28",
+    "TotalVolume": "25700",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:20:00Z",
+    "Open": "6883.37",
+    "High": "6885.19",
+    "Low": "6881.53",
+    "Close": "6885.19",
+    "TotalVolume": "27396",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:25:00Z",
+    "Open": "6885.25",
+    "High": "6887.08",
+    "Low": "6884.25",
+    "Close": "6884.92",
+    "TotalVolume": "27970",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:30:00Z",
+    "Open": "6884.81",
+    "High": "6886.23",
+    "Low": "6881.47",
+    "Close": "6881.62",
+    "TotalVolume": "33810",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:35:00Z",
+    "Open": "6881.7",
+    "High": "6887.27",
+    "Low": "6881.67",
+    "Close": "6886.26",
+    "TotalVolume": "42223",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:40:00Z",
+    "Open": "6886.3",
+    "High": "6887.15",
+    "Low": "6884.38",
+    "Close": "6884.44",
+    "TotalVolume": "40354",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:45:00Z",
+    "Open": "6884.55",
+    "High": "6888.64",
+    "Low": "6884.15",
+    "Close": "6888.52",
+    "TotalVolume": "42649",
+    "Status": "",
+    "RSI": 51.8864
+  },
+  {
+    "TimeStamp": "2026-02-24T20:50:00Z",
+    "Open": "6888.49",
+    "High": "6892.91",
+    "Low": "6888.11",
+    "Close": "6891.8",
+    "TotalVolume": "48545",
+    "Status": "",
+    "RSI": 59.6819
+  },
+  {
+    "TimeStamp": "2026-02-24T20:55:00Z",
+    "Open": "6891.73",
+    "High": "6899.17",
+    "Low": "6890.01",
+    "Close": "6894.8",
+    "TotalVolume": "82122",
+    "Status": "",
+    "RSI": 65.4431
+  },
+  {
+    "TimeStamp": "2026-02-24T21:00:00Z",
+    "Open": "6894.77",
+    "High": "6894.77",
+    "Low": "6889.31",
+    "Close": "6891.04",
+    "TotalVolume": "185167",
+    "Status": "",
+    "RSI": 54.4687
+  },
+  {
+    "TimeStamp": "2026-02-24T19:55:00Z",
+    "Open": "6888.18",
+    "High": "6892.82",
+    "Low": "6888.02",
+    "Close": "6888.22",
+    "TotalVolume": "23240",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:00:00Z",
+    "Open": "6888.23",
+    "High": "6889.47",
+    "Low": "6887.4",
+    "Close": "6887.66",
+    "TotalVolume": "24215",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:05:00Z",
+    "Open": "6887.64",
+    "High": "6889.61",
+    "Low": "6886.4",
+    "Close": "6886.74",
+    "TotalVolume": "24677",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:10:00Z",
+    "Open": "6886.76",
+    "High": "6887.64",
+    "Low": "6884.05",
+    "Close": "6885.07",
+    "TotalVolume": "23721",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:15:00Z",
+    "Open": "6885.01",
+    "High": "6885.26",
+    "Low": "6882.47",
+    "Close": "6883.28",
+    "TotalVolume": "25700",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:20:00Z",
+    "Open": "6883.37",
+    "High": "6885.19",
+    "Low": "6881.53",
+    "Close": "6885.19",
+    "TotalVolume": "27396",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:25:00Z",
+    "Open": "6885.25",
+    "High": "6887.08",
+    "Low": "6884.25",
+    "Close": "6884.92",
+    "TotalVolume": "27970",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:30:00Z",
+    "Open": "6884.81",
+    "High": "6886.23",
+    "Low": "6881.47",
+    "Close": "6881.62",
+    "TotalVolume": "33810",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:35:00Z",
+    "Open": "6881.7",
+    "High": "6887.27",
+    "Low": "6881.67",
+    "Close": "6886.26",
+    "TotalVolume": "42223",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:40:00Z",
+    "Open": "6886.3",
+    "High": "6887.15",
+    "Low": "6884.38",
+    "Close": "6884.44",
+    "TotalVolume": "40354",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:45:00Z",
+    "Open": "6884.55",
+    "High": "6888.64",
+    "Low": "6884.15",
+    "Close": "6888.52",
+    "TotalVolume": "42649",
+    "Status": "",
+    "RSI": 51.8864
+  },
+  {
+    "TimeStamp": "2026-02-24T20:50:00Z",
+    "Open": "6888.49",
+    "High": "6892.91",
+    "Low": "6888.11",
+    "Close": "6891.8",
+    "TotalVolume": "48545",
+    "Status": "",
+    "RSI": 59.6819
+  },
+  {
+    "TimeStamp": "2026-02-24T20:55:00Z",
+    "Open": "6891.73",
+    "High": "6899.17",
+    "Low": "6890.01",
+    "Close": "6894.8",
+    "TotalVolume": "82122",
+    "Status": "",
+    "RSI": 65.4431
+  },
+  {
+    "TimeStamp": "2026-02-24T21:00:00Z",
+    "Open": "6894.77",
+    "High": "6894.77",
+    "Low": "6889.31",
+    "Close": "6891.04",
+    "TotalVolume": "185167",
+    "Status": "",
+    "RSI": 54.4687
+  },
+  {
+    "TimeStamp": "2026-02-24T20:00:00Z",
+    "Open": "6888.23",
+    "High": "6889.47",
+    "Low": "6887.4",
+    "Close": "6887.66",
+    "TotalVolume": "24215",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:05:00Z",
+    "Open": "6887.64",
+    "High": "6889.61",
+    "Low": "6886.4",
+    "Close": "6886.74",
+    "TotalVolume": "24677",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:10:00Z",
+    "Open": "6886.76",
+    "High": "6887.64",
+    "Low": "6884.05",
+    "Close": "6885.07",
+    "TotalVolume": "23721",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:15:00Z",
+    "Open": "6885.01",
+    "High": "6885.26",
+    "Low": "6882.47",
+    "Close": "6883.28",
+    "TotalVolume": "25700",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:20:00Z",
+    "Open": "6883.37",
+    "High": "6885.19",
+    "Low": "6881.53",
+    "Close": "6885.19",
+    "TotalVolume": "27396",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:25:00Z",
+    "Open": "6885.25",
+    "High": "6887.08",
+    "Low": "6884.25",
+    "Close": "6884.92",
+    "TotalVolume": "27970",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:30:00Z",
+    "Open": "6884.81",
+    "High": "6886.23",
+    "Low": "6881.47",
+    "Close": "6881.62",
+    "TotalVolume": "33810",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:35:00Z",
+    "Open": "6881.7",
+    "High": "6887.27",
+    "Low": "6881.67",
+    "Close": "6886.26",
+    "TotalVolume": "42223",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:40:00Z",
+    "Open": "6886.3",
+    "High": "6887.15",
+    "Low": "6884.38",
+    "Close": "6884.44",
+    "TotalVolume": "40354",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:45:00Z",
+    "Open": "6884.55",
+    "High": "6888.64",
+    "Low": "6884.15",
+    "Close": "6888.52",
+    "TotalVolume": "42649",
+    "Status": "",
+    "RSI": null
+  },
+  {
+    "TimeStamp": "2026-02-24T20:50:00Z",
+    "Open": "6888.49",
+    "High": "6892.91",
+    "Low": "6888.11",
+    "Close": "6891.8",
+    "TotalVolume": "48545",
+    "Status": "",
+    "RSI": 59.4438
+  },
+  {
+    "TimeStamp": "2026-02-24T20:55:00Z",
+    "Open": "6891.73",
+    "High": "6899.17",
+    "Low": "6890.01",
+    "Close": "6894.8",
+    "TotalVolume": "82122",
+    "Status": "",
+    "RSI": 64.9656
+  },
+  {
+    "TimeStamp": "2026-02-24T21:00:00Z",
+    "Open": "6894.77",
+    "High": "6894.77",
+    "Low": "6889.31",
+    "Close": "6891.04",
+    "TotalVolume": "185167",
+    "Status": "",
+    "RSI": 54.5025
   }
 ]

@@ -63,20 +63,34 @@ def _build_occ_symbol(root: str, expiration: str, side: str, strike: float) -> s
 # ══════════════════════════════════════════════════════════════
 
 class OptionsTrader:
-    """Selects max-premium credit spreads and places opening orders."""
-
-    DATA_FILE = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "options_data_config.json"
-    )
 
     def __init__(self, cfg, token_mgr, logger: logging.Logger):
         self.cfg = cfg
         self.token_mgr = token_mgr
         self.log = logger
 
-    # ──────────────────────────────────────────────────────────
-    # Internal helpers
-    # ──────────────────────────────────────────────────────────
+    def _get_leg_market(self, symbol: str) -> dict:
+        """Fetch latest bid/ask for a given option symbol using PositionTracker."""
+        try:
+            from position_tracker import PositionTracker
+        except ImportError:
+            self.log.error("PositionTracker import failed.")
+            return {"bid": 0.0, "ask": 0.0}
+        tracker = PositionTracker(self.cfg, self.token_mgr, self.log)
+        try:
+            spreads = tracker.get_open_spreads()
+            for spread in spreads:
+                if spread.short_symbol == symbol:
+                    return {"bid": spread.short_leg.bid, "ask": spread.short_leg.ask}
+                if spread.long_symbol == symbol:
+                    return {"bid": spread.long_leg.bid, "ask": spread.long_leg.ask}
+        except Exception as exc:
+            self.log.error(f"Failed to get market for {symbol}: {exc}")
+        return {"bid": 0.0, "ask": 0.0}
+
+    DATA_FILE = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "options_data_config.json"
+    )
 
     def _load_spreads(self, spread_key: str) -> List[Dict[str, Any]]:
         """Load a list of spread candidates from the JSON data file.
@@ -343,6 +357,7 @@ class OptionsTrader:
             self.log.exception("Call credit order unexpected error: %s", exc)
         return None
 
+
     def close_credit_spread(
         self,
         short_symbol: str,
@@ -352,30 +367,69 @@ class OptionsTrader:
     ) -> Optional[Dict[str, Any]]:
         """Submit a closing order for an open credit spread.
 
-        * BUY TO CLOSE the short leg
-        * SELL TO CLOSE the long leg
-        * Limit price = current cost to close (debit)
-
-        Returns the API response dict on success, or ``None`` on failure.
+        If the long leg bid < $0.05, submit an OSO order:
+        - BUY TO CLOSE the short leg at ask
+        - Once filled, SELL TO CLOSE the long leg at bid
+        Otherwise, submit a regular two-leg close order.
         """
-        payload: Dict[str, Any] = {
-            "AccountID": self.cfg.account_id,
-            "OrderType": "Limit",
-            "LimitPrice": f"{abs(limit_price):.2f}",
-            "TimeInForce": {"Duration": "GTC"},
-            "Legs": [
-                {
-                    "Symbol": short_symbol,
-                    "Quantity": str(quantity),
-                    "TradeAction": "BUYTOCLOSE",
-                },
-                {
-                    "Symbol": long_symbol,
-                    "Quantity": str(quantity),
-                    "TradeAction": "SELLTOCLOSE",
-                },
-            ],
-        }
+        # Fetch latest market for both legs
+        short_mkt = self._get_leg_market(short_symbol)
+        long_mkt = self._get_leg_market(long_symbol)
+        long_bid = long_mkt.get("bid", 0.0)
+        short_ask = short_mkt.get("ask", 0.0)
+
+        if long_bid < 0.05:
+            # Submit OSO order
+            payload = {
+                "AccountID": self.cfg.account_id,
+                "OrderType": "Limit",
+                "LimitPrice": f"{short_ask:.2f}",
+                "TimeInForce": {"Duration": "GTC"},
+                "Legs": [
+                    {
+                        "Symbol": short_symbol,
+                        "Quantity": str(quantity),
+                        "TradeAction": "BUYTOCLOSE",
+                    }
+                ],
+                "OrderStrategyType": "OSO",
+                "ChildOrders": [
+                    {
+                        "OrderType": "Limit",
+                        "LimitPrice": f"{long_bid:.2f}",
+                        "TimeInForce": {"Duration": "GTC"},
+                        "Legs": [
+                            {
+                                "Symbol": long_symbol,
+                                "Quantity": str(quantity),
+                                "TradeAction": "SELLTOCLOSE",
+                            }
+                        ],
+                    }
+                ],
+            }
+            order_type = "OSO"
+        else:
+            # Regular two-leg close order
+            payload = {
+                "AccountID": self.cfg.account_id,
+                "OrderType": "Limit",
+                "LimitPrice": f"{abs(limit_price):.2f}",
+                "TimeInForce": {"Duration": "GTC"},
+                "Legs": [
+                    {
+                        "Symbol": short_symbol,
+                        "Quantity": str(quantity),
+                        "TradeAction": "BUYTOCLOSE",
+                    },
+                    {
+                        "Symbol": long_symbol,
+                        "Quantity": str(quantity),
+                        "TradeAction": "SELLTOCLOSE",
+                    },
+                ],
+            }
+            order_type = "REGULAR"
 
         url = f"{self.cfg.base_url}/orderexecution/orders"
         token = self.token_mgr.get_access_token()
@@ -385,7 +439,7 @@ class OptionsTrader:
         }
 
         self.log.info(
-            "Submitting close order | short=%s  long=%s  qty=%d  limit=%.2f",
+            f"Submitting {order_type} close order | short=%s  long=%s  qty=%d  limit=%.2f",
             short_symbol, long_symbol, quantity, limit_price,
         )
         self.log.debug("Close payload: %s", json.dumps(payload, indent=2))
