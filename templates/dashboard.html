@@ -493,6 +493,15 @@
         <div class="card-label">SPX Price</div>
         <div class="card-value" id="spx-price">{{ state.price }}</div>
         <div class="card-sub" id="price-ts" data-utc="{{ state.timestamp }}">{{ state.timestamp }}</div>
+        <div class="candle-details" style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:4px 16px; font-size:12px;">
+            <div><span style="color:var(--muted)">O</span> <span id="candle-open">{{ state.open if state.open is defined else '—' }}</span></div>
+            <div><span style="color:var(--muted)">H</span> <span id="candle-high" style="color:var(--green)">{{ state.high if state.high is defined else '—' }}</span></div>
+            <div><span style="color:var(--muted)">L</span> <span id="candle-low" style="color:var(--red)">{{ state.low if state.low is defined else '—' }}</span></div>
+            <div><span style="color:var(--muted)">C</span> <span id="candle-close">{{ state.close if state.close is defined else '—' }}</span></div>
+            <div><span style="color:var(--muted)">Vol</span> <span id="candle-vol">{{ state.volume if state.volume is defined else '—' }}</span></div>
+            <div><span style="color:var(--muted)">Status</span> <span id="candle-status">{{ state.status if state.status is defined else '' }}</span></div>
+        </div>
+        <div id="candle-exhaustion" style="margin-top:8px; font-size:12px; font-weight:600; display:none;"></div>
     </div>
     <div class="card card-rsi">
         <div class="card-label">RSI({{ state.rsi_period }})</div>
@@ -655,7 +664,28 @@
                 // Timestamp
                 document.getElementById('updated-at').textContent = data.updated_at;
 
-                // Reversal status removed
+                // Candle details
+                document.getElementById('candle-open').textContent = data.open || '—';
+                document.getElementById('candle-high').textContent = data.high || '—';
+                document.getElementById('candle-low').textContent = data.low || '—';
+                document.getElementById('candle-close').textContent = data.close || '—';
+                document.getElementById('candle-vol').textContent = data.volume || '—';
+                document.getElementById('candle-status').textContent = data.status || '';
+
+                // Exhaustion signal
+                const exhEl = document.getElementById('candle-exhaustion');
+                if (data.exhaustion) {
+                    const exh = data.exhaustion;
+                    const isBull = exh.type === 'BULL_EXHAUSTION';
+                    exhEl.style.display = 'block';
+                    exhEl.style.color = isBull ? 'var(--red)' : 'var(--green)';
+                    exhEl.textContent = (isBull ? '🐂 BULL' : '🐻 BEAR') +
+                        ' EXHAUSTION  str=' + exh.strength +
+                        (exh.reasons ? '  (' + exh.reasons.join(', ') + ')' : '');
+                } else {
+                    exhEl.style.display = 'none';
+                    exhEl.textContent = '';
+                }
 
                 // Pulse animation
                 document.getElementById('pulse').style.background = '#22c55e';

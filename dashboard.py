@@ -38,6 +38,13 @@ def _read_state() -> dict:
             "rsi_period": 9,
             "timestamp": "",
             "updated_at": "Waiting for data…",
+            "open": "—",
+            "high": "—",
+            "low": "—",
+            "close": "—",
+            "volume": "—",
+            "status": "",
+            "exhaustion": None,
         }
 
 

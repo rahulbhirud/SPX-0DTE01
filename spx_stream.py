@@ -30,6 +30,8 @@ from collections import deque
 from dataclasses import dataclass
 
 from exhaustion_detector import ExhaustionDetector
+from options_trader import OptionsTrader
+from position_tracker import PositionTracker
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -176,6 +178,10 @@ class Config:
     @property
     def options_default_quantity(self) -> int:
         return int(self._raw.get("options_scheduler", {}).get("default_quantity", 1))
+
+    @property
+    def options_profit_target_pct(self) -> float:
+        return float(self._raw.get("options_scheduler", {}).get("profit_target_pct", 40))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -616,6 +622,8 @@ class SPXStreamer:
         self._response = None          # active streaming response (for clean shutdown)
         self._rsi      = RSIAnalyzer(cfg, logger)
         self._exhaustion = ExhaustionDetector()
+        self._trader = OptionsTrader(cfg, token_mgr, logger)
+        self._position_tracker = PositionTracker(cfg, token_mgr, logger)
         self._shutdown_event = threading.Event()  # For interruptible sleeps
 
     # ──────────────────────────────────────────────────────────
@@ -642,6 +650,7 @@ class SPXStreamer:
         daily_path = self._save_candle_to_daily_json(candle)
 
         # ── Run exhaustion detection on latest candle ────────
+        exh = None
         if daily_path:
             try:
                 exh = self._exhaustion.process_latest_candle(daily_path)
@@ -650,17 +659,47 @@ class SPXStreamer:
                         "🔔 %s  strength=%d  reasons=%s",
                         exh["type"], exh["strength"], "; ".join(exh["reasons"]),
                     )
+                    self._open_spread_on_exhaustion(exh)
             except Exception as exc:
                 self.log.warning("Exhaustion detection error: %s", exc)
 
+        # ── Monitor positions & auto-close at profit target ─
+        self._position_tracker.monitor_and_close_profitable(
+            self._trader,
+            profit_target_pct=self.cfg.options_profit_target_pct,
+        )
+
         # ── Update dashboard state file ──────────────────────
-        self._write_dashboard_state(c, ts)
+        self._write_dashboard_state(candle, exh)
+
+    # ──────────────────────────────────────────────────────────
+    # Auto-open spread on exhaustion
+    # ──────────────────────────────────────────────────────────
+
+    def _open_spread_on_exhaustion(self, exhaustion: dict) -> None:
+        """Open a credit spread when an exhaustion signal is detected.
+
+        * BULL_EXHAUSTION → open a **call** credit spread (expect reversal down)
+        * BEAR_EXHAUSTION → open a **put** credit spread (expect reversal up)
+        """
+        sig_type = exhaustion.get("type", "")
+        try:
+            if sig_type == "BULL_EXHAUSTION":
+                self.log.info("Bull exhaustion detected — opening call credit spread")
+                self._trader.open_call_credit_spread()
+            elif sig_type == "BEAR_EXHAUSTION":
+                self.log.info("Bear exhaustion detected — opening put credit spread")
+                self._trader.open_put_credit_spread()
+            else:
+                self.log.warning("Unknown exhaustion type: %s — skipping trade", sig_type)
+        except Exception as exc:
+            self.log.error("Failed to open spread on %s: %s", sig_type, exc)
 
     # ──────────────────────────────────────────────────────────
     # Dashboard State Writer
     # ──────────────────────────────────────────────────────────
 
-    def _write_dashboard_state(self, price, timestamp):
+    def _write_dashboard_state(self, candle: dict, exhaustion: Optional[dict] = None):
         """Write current state to a JSON file for the dashboard UI."""
         import datetime as _dt
         est = _dt.timezone(_dt.timedelta(hours=-5), "EST")
@@ -670,11 +709,18 @@ class SPXStreamer:
         rsi_display = round(rsi_val, 2) if rsi_val is not None else None
 
         state = {
-            "price": str(price),
+            "price": str(candle.get("Close", "—")),
             "rsi": rsi_display,
             "rsi_period": self._rsi._period,
-            "timestamp": timestamp,
+            "timestamp": candle.get("TimeStamp", ""),
             "updated_at": now_est,
+            "open": str(candle.get("Open", "—")),
+            "high": str(candle.get("High", "—")),
+            "low": str(candle.get("Low", "—")),
+            "close": str(candle.get("Close", "—")),
+            "volume": str(candle.get("TotalVolume", "—")),
+            "status": candle.get("Status", ""),
+            "exhaustion": exhaustion,
         }
         try:
             tmp = self._STATE_FILE + ".tmp"

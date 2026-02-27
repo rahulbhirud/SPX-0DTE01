@@ -380,6 +380,70 @@ class PositionTracker:
                 s.short_delta,
             )
 
+    def monitor_and_close_profitable(
+        self,
+        trader,
+        profit_target_pct: float = 40.0,
+    ) -> None:
+        """Check all open spreads and close any whose profit >= target %.
+
+        Profit % is calculated as:
+            ``(credit_received - current_cost) / credit_received * 100``
+
+        When the threshold is met the spread is closed via
+        ``trader.close_credit_spread()``.
+        """
+        try:
+            spreads = self.get_open_spreads()
+        except Exception as exc:
+            self.log.error("Position monitor: failed to fetch spreads: %s", exc)
+            return
+
+        if not spreads:
+            return
+
+        for s in spreads:
+            if s.credit_received <= 0:
+                continue  # Can't compute profit %
+
+            profit_pct = ((s.credit_received - s.current_cost) / s.credit_received) * 100
+
+            self.log.debug(
+                "Profit check | %s %g/%g | credit=%.2f  cost=%.2f  profit=%.1f%%  target=%.0f%%",
+                s.spread_type, s.short_strike, s.long_strike,
+                s.credit_received, s.current_cost, profit_pct, profit_target_pct,
+            )
+
+            if profit_pct >= profit_target_pct:
+                self.log.info(
+                    "\U0001f4b0 Profit target hit! %s %g/%g | profit=%.1f%% >= %.0f%% | "
+                    "Submitting close order…",
+                    s.spread_type, s.short_strike, s.long_strike,
+                    profit_pct, profit_target_pct,
+                )
+                try:
+                    result = trader.close_credit_spread(
+                        short_symbol=s.short_symbol,
+                        long_symbol=s.long_symbol,
+                        quantity=s.contracts,
+                        limit_price=s.current_cost,
+                    )
+                    if result:
+                        self.log.info(
+                            "Close order submitted for %s %g/%g.",
+                            s.spread_type, s.short_strike, s.long_strike,
+                        )
+                    else:
+                        self.log.warning(
+                            "Close order returned None for %s %g/%g.",
+                            s.spread_type, s.short_strike, s.long_strike,
+                        )
+                except Exception as exc:
+                    self.log.error(
+                        "Failed to close %s %g/%g: %s",
+                        s.spread_type, s.short_strike, s.long_strike, exc,
+                    )
+
     def _run_loop(self) -> None:
         """Background loop — polls positions every POLL_INTERVAL seconds."""
         self.log.info(

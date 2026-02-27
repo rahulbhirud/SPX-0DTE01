@@ -82,3 +82,4 @@ options_scheduler:
   min_premium: 0.40              # Minimum net credit ($)
   max_premium: 0.70              # Maximum net credit ($)
   default_quantity: 15              # Default number of contracts per trade
+  profit_target_pct: 40             # Auto-close position when profit >= this %
