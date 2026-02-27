@@ -1,4 +1,4 @@
-spx_stream.log
+log/
 
 # Ignore all runtime JSON under json/
 json/

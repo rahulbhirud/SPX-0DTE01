@@ -44,7 +44,7 @@ token:
 logging:
   level: "DEBUG"             # DEBUG | INFO | WARNING | ERROR
   log_to_file: true
-  log_file: "./spx_stream.log"
+  log_file: "./log/spx_stream.log"
   max_bytes: 5242880         # 5 MB
   backup_count: 3
 

@@ -28,6 +28,8 @@ import time
 import webbrowser
 from collections import deque
 from dataclasses import dataclass
+
+from exhaustion_detector import ExhaustionDetector
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -205,8 +207,14 @@ def setup_logging(cfg: Config) -> logging.Logger:
     log.addHandler(ch)
 
     if lc.get("log_to_file"):
+        # Ensure log directory exists when using a nested path (e.g. ./log/spx_stream.log)
+        log_path = lc["log_file"]
+        log_dir = os.path.dirname(os.path.abspath(log_path))
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+
         fh = logging.handlers.RotatingFileHandler(
-            lc["log_file"], maxBytes=lc["max_bytes"], backupCount=lc["backup_count"]
+            log_path, maxBytes=lc["max_bytes"], backupCount=lc["backup_count"]
         )
         fh.setFormatter(fmt)
         log.addHandler(fh)
@@ -607,6 +615,7 @@ class SPXStreamer:
         self._running  = False
         self._response = None          # active streaming response (for clean shutdown)
         self._rsi      = RSIAnalyzer(cfg, logger)
+        self._exhaustion = ExhaustionDetector()
         self._shutdown_event = threading.Event()  # For interruptible sleeps
 
     # ──────────────────────────────────────────────────────────
@@ -630,7 +639,19 @@ class SPXStreamer:
         )
 
         # ── Persist candle to daily JSON file ────────────────
-        self._save_candle_to_daily_json(candle)
+        daily_path = self._save_candle_to_daily_json(candle)
+
+        # ── Run exhaustion detection on latest candle ────────
+        if daily_path:
+            try:
+                exh = self._exhaustion.process_latest_candle(daily_path)
+                if exh:
+                    self.log.info(
+                        "🔔 %s  strength=%d  reasons=%s",
+                        exh["type"], exh["strength"], "; ".join(exh["reasons"]),
+                    )
+            except Exception as exc:
+                self.log.warning("Exhaustion detection error: %s", exc)
 
         # ── Update dashboard state file ──────────────────────
         self._write_dashboard_state(c, ts)
@@ -667,8 +688,9 @@ class SPXStreamer:
     # Daily candle persistence
     # ──────────────────────────────────────────────────────────
 
-    def _save_candle_to_daily_json(self, candle: dict) -> None:
-        """Append a candle record to the day's JSON file under stream_data/."""
+    def _save_candle_to_daily_json(self, candle: dict) -> Optional[str]:
+        """Append a candle record to the day's JSON file under stream_data/.
+        Returns the filepath on success, None on failure."""
         import datetime as _dt
 
         ts_str = candle.get("TimeStamp", "")
@@ -701,21 +723,35 @@ class SPXStreamer:
         }
 
         try:
-            # Read existing array, append, rewrite
+            # Read existing array, upsert by TimeStamp, rewrite
             if os.path.exists(filepath):
                 with open(filepath, "r") as f:
-                    data = json.load(f)
+                    try:
+                        data = json.load(f)
+                    except json.JSONDecodeError:
+                        data = []
             else:
                 data = []
 
-            data.append(record)
+            # Ensure we always have at most one record per candle timestamp
+            replaced = False
+            for idx, existing in enumerate(data):
+                if existing.get("TimeStamp") == ts_est_str:
+                    data[idx] = record
+                    replaced = True
+                    break
+
+            if not replaced:
+                data.append(record)
 
             tmp = filepath + ".tmp"
             with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp, filepath)
+            return filepath
         except Exception as e:
             self.log.warning("Failed to save candle to %s: %s", filepath, e)
+            return None
 
     def on_heartbeat(self):
         self.log.debug("♥ heartbeat")
