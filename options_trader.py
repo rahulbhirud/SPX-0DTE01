@@ -89,7 +89,7 @@ class OptionsTrader:
         return {"bid": 0.0, "ask": 0.0}
 
     DATA_FILE = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "options_data_config.json"
+        os.path.dirname(os.path.abspath(__file__)), "json", "options_data_config.json"
     )
 
     def _load_spreads(self, spread_key: str) -> List[Dict[str, Any]]:

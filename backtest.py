@@ -44,8 +44,8 @@ EST = timezone(timedelta(hours=-5))
 # We paginate by date windows to support arbitrary durations.
 MAX_BARS_PER_REQUEST = 57_600
 
-CONFIG_PATH = "config.yaml"
-TOKEN_PATH = "./ts_token.json"
+CONFIG_PATH = "yaml/config.yaml"
+TOKEN_PATH = "./json/ts_token.json"
 
 LOG = logging.getLogger("backtest")
 

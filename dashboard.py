@@ -23,7 +23,7 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__, template_folder="templates")
 
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard_state.json")
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "dashboard_state.json")
 
 
 def _read_state() -> dict:
@@ -62,7 +62,7 @@ def _get_trader():
         from spx_stream import Config, TokenManager, setup_logging
         from options_trader import OptionsTrader
 
-        config_path = os.environ.get("SPX_CONFIG", "config.yaml")
+        config_path = os.environ.get("SPX_CONFIG", "yaml/config.yaml")
         cfg = Config(config_path)
         log = setup_logging(cfg)
         token_mgr = TokenManager(cfg, log)
@@ -76,7 +76,7 @@ def _get_order_tracker():
         from spx_stream import Config, TokenManager, setup_logging
         from order_tracker import OrderTracker
 
-        config_path = os.environ.get("SPX_CONFIG", "config.yaml")
+        config_path = os.environ.get("SPX_CONFIG", "yaml/config.yaml")
         cfg = Config(config_path)
         log = setup_logging(cfg)
         token_mgr = TokenManager(cfg, log)
@@ -90,7 +90,7 @@ def _get_position_tracker():
         from spx_stream import Config, TokenManager, setup_logging
         from position_tracker import PositionTracker
 
-        config_path = os.environ.get("SPX_CONFIG", "config.yaml")
+        config_path = os.environ.get("SPX_CONFIG", "yaml/config.yaml")
         cfg = Config(config_path)
         log = setup_logging(cfg)
         token_mgr = TokenManager(cfg, log)

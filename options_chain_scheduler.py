@@ -8,7 +8,7 @@ the filtered list to ``options_data_config.json``.
 
 The scheduler can run:
   • As a background thread inside ``spx_stream.py`` (primary mode)
-  • Standalone:  python options_chain_scheduler.py [--config config.yaml]
+    • Standalone:  python options_chain_scheduler.py [--config yaml/config.yaml]
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ class OptionsChainScheduler:
     """
 
     SAVE_FILE = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "options_data_config.json"
+        os.path.dirname(os.path.abspath(__file__)), "json", "options_data_config.json"
     )
 
     # ──────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ class OptionsChainScheduler:
         """Read latest SPX price – first from dashboard state, then API."""
         # Fast path: read from the state file the streamer already writes
         state_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "dashboard_state.json"
+            os.path.dirname(os.path.abspath(__file__)), "json", "dashboard_state.json"
         )
         try:
             with open(state_file) as f:
@@ -610,7 +610,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="SPX Options Chain Scheduler — streams chain and filters credit spreads"
     )
-    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--config", default="yaml/config.yaml")
     args = parser.parse_args()
 
     if not Path(args.config).exists():

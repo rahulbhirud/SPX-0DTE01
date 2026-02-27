@@ -1,0 +1,84 @@
+# ============================================================
+# TradeStation API Configuration
+# ============================================================
+
+# ----- Account Mode -----
+# Set to "sim" for Simulated account, "live" for Live account
+account_mode: "sim"
+
+# ----- API Credentials -----
+credentials:
+  client_id: "qdWl7XZlhJAgfGX5lXjsLKIYwJHIblSB"
+  client_secret: "t9ZmqD5bBQM4Gqk7lnoEDqxTqD0NM9_GvLyiIBa4-WhU0WnhP46YIhkVN822FlTT"
+  redirect_uri: "http://localhost:3000/callback"
+  refresh_token: "dksi0aBxm2QNWcsxB-XGBO5cRzFMtYiX2-u1KmjDgkxbi"
+
+
+# ----- Account IDs -----
+accounts:
+  sim: "SIM3170696M"    # Simulated account ID
+  live: "SIM3170696M"       # Live account ID
+
+# ----- API Endpoints -----
+endpoints:
+  auth_url: "https://signin.tradestation.com/authorize"
+  token_url: "https://signin.tradestation.com/oauth/token"
+  base_url:  "https://sim-api.tradestation.com/v3"
+
+# ----- Streaming Configuration -----
+
+streaming:
+  symbol: "$SPX.X"          # SPX index symbol on TradeStation
+  bar_unit: "Minute"         # Minute | Daily | Weekly | Monthly
+  bar_interval: 5            # 5-minute candles
+  # ⚠ bars_back must be > rsi.period + 1 so RSI warms up on historical bars
+  # Recommended: at least rsi.period * 3 (e.g. 27 for period=9)
+  bars_back: 50
+  session_template: "Default"  # Default | USEQPre | USEQPost | USEQ24Hour
+
+# ----- Token Storage -----
+token:
+  storage_path: "./json/ts_token.json"
+
+# ----- Logging -----
+logging:
+  level: "DEBUG"             # DEBUG | INFO | WARNING | ERROR
+  log_to_file: true
+  log_file: "./spx_stream.log"
+  max_bytes: 5242880         # 5 MB
+  backup_count: 3
+
+# ----- Reconnection -----
+reconnection:
+  enabled: true
+  max_retries: 10
+  retry_delay_seconds: 5
+  max_delay_seconds: 120
+
+# ============================================================
+# RSI Analysis Settings
+# ============================================================
+rsi:
+  # ── Core RSI ──────────────────────────────────────────────
+  period: 9                  # RSI lookback period (classic: 14, aggressive: 9)
+  overbought: 70.0           # Log zone label when RSI ≥ this
+  oversold: 30.0             # Log zone label when RSI ≤ this
+
+       # Min RSI pts rise from recent trough (bullish)
+
+# ============================================================
+# Options Chain Scheduler
+# ============================================================
+# Streams the options chain every N seconds, identifies credit
+# spreads filtered by delta and premium, and saves candidates
+# to options_data_config.json.
+options_scheduler:
+  enabled: true
+  underlying: "$SPXW.X"         # Symbol for option-chain lookup
+  fetch_interval: 5              # Seconds between fetches
+  strike_proximity: 150         # Strikes around ATM to request
+  spread_widths: [5, 10, 15, 20, 30] # Vertical spread widths (points)
+  max_delta: 0.10                # Short leg must have |delta| < this (10 delta)
+  min_premium: 0.40              # Minimum net credit ($)
+  max_premium: 0.70              # Maximum net credit ($)
+  default_quantity: 15              # Default number of contracts per trade
