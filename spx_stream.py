@@ -688,17 +688,17 @@ class SPXStreamer:
         """
         sig_type = exhaustion.get("type", "")
         # disabled Auto Trading. Please use the dashboard buttons to open spreads manually after exhaustion signals.
-        # try:
-        #     if sig_type == "BULL_EXHAUSTION":
-        #         self.log.info("Bull exhaustion detected — opening call credit spread")
-        #         self._trader.open_call_credit_spread()
-        #     elif sig_type == "BEAR_EXHAUSTION":
-        #         self.log.info("Bear exhaustion detected — opening put credit spread")
-        #         self._trader.open_put_credit_spread()
-        #     else:
-        #         self.log.warning("Unknown exhaustion type: %s — skipping trade", sig_type)
-        # except Exception as exc:
-        #     self.log.error("Failed to open spread on %s: %s", sig_type, exc)
+        try:
+            if sig_type == "BULL_EXHAUSTION":
+                self.log.info("Bull exhaustion detected — opening call credit spread")
+                self._trader.open_call_credit_spread()
+            elif sig_type == "BEAR_EXHAUSTION":
+                self.log.info("Bear exhaustion detected — opening put credit spread")
+                self._trader.open_put_credit_spread()
+            else:
+                self.log.warning("Unknown exhaustion type: %s — skipping trade", sig_type)
+        except Exception as exc:
+            self.log.error("Failed to open spread on %s: %s", sig_type, exc)
 
     # ──────────────────────────────────────────────────────────
     # Market-hours helper
