@@ -289,7 +289,11 @@
         @media (max-width: 768px) {
             .cards { grid-template-columns: 1fr; }
             .card-value { font-size: 32px; }
-            .trade-row { flex-direction: column; }
+            .trade-row {
+                flex-direction: row;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
         }
 
         /* ── Open Orders Modal ─────────────────────── */

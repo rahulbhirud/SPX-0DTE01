@@ -12,3 +12,8 @@ ts_token.json
 stream_data/2026-02-23.json
 stream_data/2026-02-24.json
 stream_data/2026-02-25.json
+keygen.pub
+.gitignore
+.gitignore
+deploy.sh
+keygen
