@@ -340,6 +340,66 @@ class OptionsChainScheduler:
         return {"calls": calls, "puts": puts}
 
     # ──────────────────────────────────────────────────────────
+    # Total premium calculation  (entire chain, not filtered)
+    # ──────────────────────────────────────────────────────────
+
+    PREMIUM_FILE = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "json", "stream_data", "total_premium.json",
+    )
+
+    def _calculate_total_premiums(
+        self, calls: Dict[float, OptionLeg], puts: Dict[float, OptionLeg]
+    ) -> tuple:
+        """Sum the bid (net credit) for every option in the chain.
+
+        Each premium is multiplied by 100 (shares per contract).
+
+        Returns:
+            (call_premium_total, put_premium_total) rounded to 2 decimals.
+        """
+        call_total = round(sum(leg.bid for leg in calls.values()) * 100, 2)
+        put_total  = round(sum(leg.bid for leg in puts.values()) * 100, 2)
+        return call_total, put_total
+
+    def _save_total_premiums(
+        self, call_total: float, put_total: float
+    ) -> None:
+        """Save the latest premium totals to the JSON file (overwrites).
+
+        File layout::
+
+            {
+              "$SPXW.X": {
+                "timestamp": "…",
+                "call_premium_total": …,
+                "put_premium_total": …
+              }
+            }
+        """
+        data = {
+            self._underlying: {
+                "timestamp": _now_est().isoformat(),
+                "call_premium_total": call_total,
+                "put_premium_total": put_total,
+            }
+        }
+
+        # Atomic write
+        try:
+            os.makedirs(os.path.dirname(self.PREMIUM_FILE), exist_ok=True)
+            tmp = self.PREMIUM_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, self.PREMIUM_FILE)
+            self.log.info(
+                "Total premiums saved → call=$%.2f  put=$%.2f",
+                call_total, put_total,
+            )
+        except Exception as exc:
+            self.log.error("Failed to write %s: %s", self.PREMIUM_FILE, exc)
+
+    # ──────────────────────────────────────────────────────────
     # Spread identification
     # ──────────────────────────────────────────────────────────
 
@@ -499,6 +559,10 @@ class OptionsChainScheduler:
                 self._underlying, expiration,
             )
             return {}
+
+        # ── Total premium (entire chain, before spread filtering) ──
+        call_premium, put_premium = self._calculate_total_premiums(calls, puts)
+        self._save_total_premiums(call_premium, put_premium)
 
         call_spreads = self._find_credit_call_spreads(calls, current_price)
         put_spreads  = self._find_credit_put_spreads(puts, current_price)

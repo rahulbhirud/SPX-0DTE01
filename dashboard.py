@@ -25,6 +25,7 @@ app = Flask(__name__, template_folder="templates")
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "dashboard_state.json")
 OPTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "options_data_config.json")
+PREMIUM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "stream_data", "total_premium.json")
 
 
 def _read_state() -> dict:
@@ -62,14 +63,38 @@ def _read_options_data() -> dict:
         return {}
 
 
+def _read_total_premium() -> dict:
+    """Read latest total premium data from total_premium.json."""
+    try:
+        with open(PREMIUM_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
 def _enrich_state(state: dict) -> dict:
-    """Merge market stats (ATM IV, etc.) into the dashboard state."""
+    """Merge market stats (ATM IV, total premium, etc.) into the dashboard state."""
     opts = _read_options_data()
     atm_iv = opts.get("atm_iv")
     if atm_iv and isinstance(atm_iv, dict):
         state["atm_iv"] = atm_iv
     else:
         state.setdefault("atm_iv", {"call": None, "put": None})
+
+    # Total premium (call - put)
+    premium_data = _read_total_premium()
+    # Find first symbol entry (typically "$SPXW.X")
+    tp = None
+    for _sym, entry in premium_data.items():
+        if isinstance(entry, dict):
+            tp = entry
+            break
+    if tp:
+        call_p = tp.get("call_premium_total", 0) or 0
+        put_p = tp.get("put_premium_total", 0) or 0
+        state["total_premium"] = round(call_p - put_p, 2)
+    else:
+        state["total_premium"] = None
     return state
 
 

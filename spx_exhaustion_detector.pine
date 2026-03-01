@@ -1,0 +1,252 @@
+// ============================================================
+// SPX Exhaustion Detector
+// Replicates the strategy from back_test_ex.py / exhaustion_detector.py
+// Plots bull & bear exhaustion signals with strength > 3
+// ============================================================
+//@version=5
+indicator("SPX Exhaustion Detector", overlay=true, max_labels_count=500)
+
+// ============================================================
+// INPUTS
+// ============================================================
+i_rsiPeriod      = input.int(14,   "RSI Period",         minval=2)
+i_rsiOverbought  = input.int(70,   "RSI Overbought",     minval=50, maxval=100)
+i_rsiOversold    = input.int(30,   "RSI Oversold",       minval=0,  maxval=50)
+i_volAvgPeriod   = input.int(20,   "Volume Avg Period",  minval=1)
+i_atrPeriod      = input.int(14,   "ATR Period",         minval=1)
+i_lookback       = input.int(10,   "Swing Lookback",     minval=2)
+i_minThrustBars  = input.int(3,    "Min Thrust Bars",    minval=1)
+i_minStrength    = input.int(3,    "Min Strength Filter", minval=1, maxval=5,
+                                   tooltip="Only plot signals with strength > this value")
+i_bearRsiCeiling = input.float(32, "Bear RSI Ceiling",   minval=0, maxval=100,
+                                   tooltip="Bear exhaustion requires RSI < this value")
+i_bullRsiFloor   = input.float(68, "Bull RSI Floor",     minval=0, maxval=100,
+                                   tooltip="Bull exhaustion requires RSI > this value")
+i_startHour      = input.int(10,   "Window Start Hour (EST)",  minval=0, maxval=23)
+i_startMinute    = input.int(0,    "Window Start Minute",      minval=0, maxval=59)
+i_endHour        = input.int(14,   "Window End Hour (EST)",    minval=0, maxval=23)
+i_endMinute      = input.int(30,   "Window End Minute",        minval=0, maxval=59)
+
+// ============================================================
+// TIME-OF-DAY FILTER  (EST / New York)
+// ============================================================
+// Convert bar time to minutes-since-midnight in EST
+_estHour   = hour(time, "America/New_York")
+_estMinute = minute(time, "America/New_York")
+_barMins   = _estHour * 60 + _estMinute
+_startMins = i_startHour * 60 + i_startMinute   // 10:00 = 600
+_endMins   = i_endHour   * 60 + i_endMinute     // 14:30 = 870
+inTimeWindow = _barMins >= _startMins and _barMins <= _endMins
+
+// ============================================================
+// INDICATORS
+// ============================================================
+rsi       = ta.rsi(close, i_rsiPeriod)
+atr       = ta.atr(i_atrPeriod)
+avgVolume = ta.sma(volume, i_volAvgPeriod)
+
+// ============================================================
+// HELPER CALCULATIONS
+// ============================================================
+bodySize    = math.abs(close - open)
+candleRange = high - low
+upperWick   = high - math.max(open, close)
+lowerWick   = math.min(open, close) - low
+
+// Swing High / Low  (within 0.1% of the lookback extreme)
+swingHigh   = ta.highest(high, i_lookback)
+swingLow    = ta.lowest(low, i_lookback)
+atSwingHigh = high >= swingHigh * 0.999
+atSwingLow  = low  <= swingLow  * 1.001
+
+// Volume Climax  (volume > 2× average)
+isVolumeClimax = not na(avgVolume) and avgVolume > 0 and volume > avgVolume * 2.0
+
+// ============================================================
+// CANDLESTICK PATTERNS
+// ============================================================
+// Shooting Star:  upper wick ≥ 60 % of range,  body ≤ 25 %
+isShootingStar = candleRange > 0 and
+     (upperWick / candleRange) >= 0.60 and
+     (bodySize  / candleRange) <= 0.25
+
+// Hammer:  lower wick ≥ 60 % of range,  body ≤ 25 %
+isHammer = candleRange > 0 and
+     (lowerWick / candleRange) >= 0.60 and
+     (bodySize  / candleRange) <= 0.25
+
+// Bearish Engulfing
+isBearishEngulfing = close[1] > open[1] and close < open and
+     open >= close[1] and close <= open[1] and
+     bodySize > bodySize[1]
+
+// Bullish Engulfing
+isBullishEngulfing = close[1] < open[1] and close > open and
+     open <= close[1] and close >= open[1] and
+     bodySize > bodySize[1]
+
+// Price Plateau  (3 consecutive shrinking bodies)
+isPricePlateau = bodySize < bodySize[1] and bodySize[1] < bodySize[2]
+
+// ============================================================
+// RSI DIVERGENCE   (5-bar window: recent 2 bars vs earlier 3)
+// ============================================================
+// Guard: only evaluate when RSI is valid across the full window
+_rsiValid = not na(rsi) and not na(rsi[4])
+
+// Bearish divergence — price making higher highs, RSI making lower highs
+_priceHiRecent  = math.max(high, high[1])
+_priceHiEarlier = math.max(high[2], math.max(high[3], high[4]))
+_rsiHiRecent    = math.max(rsi, rsi[1])
+_rsiHiEarlier   = math.max(rsi[2], math.max(rsi[3], rsi[4]))
+bearishDivergence = _rsiValid and
+     _priceHiRecent > _priceHiEarlier and
+     _rsiHiRecent   < _rsiHiEarlier
+
+// Bullish divergence — price making lower lows, RSI making higher lows
+_priceLoRecent  = math.min(low, low[1])
+_priceLoEarlier = math.min(low[2], math.min(low[3], low[4]))
+_rsiLoRecent    = math.min(rsi, rsi[1])
+_rsiLoEarlier   = math.min(rsi[2], math.min(rsi[3], rsi[4]))
+bullishDivergence = _rsiValid and
+     _priceLoRecent < _priceLoEarlier and
+     _rsiLoRecent   > _rsiLoEarlier
+
+// ============================================================
+// CONSECUTIVE THRUST BARS  (scan last 10 bars)
+// ============================================================
+int consecutiveBullBars = 0
+for i = 0 to 9
+    if close[i] > open[i]
+        consecutiveBullBars += 1
+    else
+        break
+
+int consecutiveBearBars = 0
+for i = 0 to 9
+    if close[i] < open[i]
+        consecutiveBearBars += 1
+    else
+        break
+
+// ============================================================
+// BULL EXHAUSTION SCORE   (evaluated at swing highs)
+// ──────────────────────────────────────────────────────────
+//  +1  Shooting Star at swing high
+//  +2  Bearish Engulfing
+//  +1  RSI ≥ Overbought
+//  +2  Bearish RSI Divergence
+//  +1  Volume Climax / Blow-off
+//  +1  Price Plateau / Body Shrink
+//  +1  Overextended bull thrust (≥ minThrustBars consecutive)
+//  Score capped at 5.  Signal fires when score ≥ 2.
+// ============================================================
+int bullScore = 0
+
+if atSwingHigh
+    if isShootingStar
+        bullScore += 1
+    if isBearishEngulfing
+        bullScore += 2
+    if not na(rsi) and rsi >= i_rsiOverbought
+        bullScore += 1
+    if bearishDivergence
+        bullScore += 2
+    if isVolumeClimax
+        bullScore += 1
+    if isPricePlateau
+        bullScore += 1
+    if consecutiveBullBars >= i_minThrustBars
+        bullScore += 1
+
+int bullStrength = math.min(bullScore, 5)
+
+// ============================================================
+// BEAR EXHAUSTION SCORE   (evaluated at swing lows)
+// ──────────────────────────────────────────────────────────
+//  +1  Hammer at swing low
+//  +2  Bullish Engulfing
+//  +1  RSI ≤ Oversold
+//  +2  Bullish RSI Divergence
+//  +1  Volume Climax / Capitulation
+//  +1  Price Plateau / Body Shrink
+//  +1  Overextended bear thrust (≥ minThrustBars consecutive)
+//  Score capped at 5.  Signal fires when score ≥ 2.
+// ============================================================
+int bearScore = 0
+
+if atSwingLow
+    if isHammer
+        bearScore += 1
+    if isBullishEngulfing
+        bearScore += 2
+    if not na(rsi) and rsi <= i_rsiOversold
+        bearScore += 1
+    if bullishDivergence
+        bearScore += 2
+    if isVolumeClimax
+        bearScore += 1
+    if isPricePlateau
+        bearScore += 1
+    if consecutiveBearBars >= i_minThrustBars
+        bearScore += 1
+
+int bearStrength = math.min(bearScore, 5)
+
+// ============================================================
+// QUALIFYING SIGNAL FILTERS
+//   strength > MIN_STRENGTH  AND  RSI guard
+// ============================================================
+bullExhaustion = bullStrength > i_minStrength and not na(rsi) and rsi > i_bullRsiFloor and inTimeWindow
+bearExhaustion = bearStrength > i_minStrength and not na(rsi) and rsi < i_bearRsiCeiling and inTimeWindow
+
+// ============================================================
+// PLOT SIGNALS
+// ============================================================
+// Bull Exhaustion — strong  (strength 5)
+plotshape(bullExhaustion and bullStrength >= 5,
+     title="Bull Exhaustion Strong",
+     style=shape.triangledown, location=location.abovebar,
+     color=color.red, size=size.large,
+     text="BU", textcolor=color.white)
+
+// Bull Exhaustion — regular  (strength 4)
+plotshape(bullExhaustion and bullStrength < 5,
+     title="Bull Exhaustion",
+     style=shape.triangledown, location=location.abovebar,
+     color=color.red, size=size.small,
+     text="BU", textcolor=color.white)
+
+// Bear Exhaustion — strong  (strength 5)
+plotshape(bearExhaustion and bearStrength >= 5,
+     title="Bear Exhaustion Strong",
+     style=shape.triangleup, location=location.belowbar,
+     color=color.green, size=size.large,
+     text="BE", textcolor=color.white)
+
+// Bear Exhaustion — regular  (strength 4)
+plotshape(bearExhaustion and bearStrength < 5,
+     title="Bear Exhaustion",
+     style=shape.triangleup, location=location.belowbar,
+     color=color.green, size=size.small,
+     text="BE", textcolor=color.white)
+
+// ── Optional: colour bars on exhaustion ──
+barcolor(bullExhaustion ? color.new(color.red, 40) : bearExhaustion ? color.new(color.green, 40) : na)
+
+// ============================================================
+// ALERTS
+// ============================================================
+if bullExhaustion
+    alert("BULL EXHAUSTION — Strength: " + str.tostring(bullStrength) +
+         " | RSI: " + str.tostring(rsi, "#.0"), alert.freq_once_per_bar)
+
+if bearExhaustion
+    alert("BEAR EXHAUSTION — Strength: " + str.tostring(bearStrength) +
+         " | RSI: " + str.tostring(rsi, "#.0"), alert.freq_once_per_bar)
+
+alertcondition(bullExhaustion, title="Bull Exhaustion Alert",
+     message="BULL EXHAUSTION detected on {{ticker}}")
+alertcondition(bearExhaustion, title="Bear Exhaustion Alert",
+     message="BEAR EXHAUSTION detected on {{ticker}}")
+// ============================================================

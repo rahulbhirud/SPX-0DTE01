@@ -594,7 +594,14 @@
             <div class="stat-item">
                 <span class="stat-label">P/C IV</span>
                 <span class="stat-value" id="stat-pc-iv">
-                    <span class="iv-put" id="iv-put">{% if state.atm_iv and state.atm_iv.put is not none %}{{ "%.2f"|format(state.atm_iv.put * 100) }}%{% else %}—{% endif %}</span><span class="iv-separator">/</span><span class="iv-call" id="iv-call">{% if state.atm_iv and state.atm_iv.call is not none %}{{ "%.2f"|format(state.atm_iv.call * 100) }}%{% else %}—{% endif %}</span>
+                    <span class="iv-put" id="iv-put">{% if state.atm_iv and state.atm_iv.put is not none %}{{ "%.0f"|format(state.atm_iv.put * 100) }}{% else %}—{% endif %}</span><span class="iv-separator">/</span><span class="iv-call" id="iv-call">{% if state.atm_iv and state.atm_iv.call is not none %}{{ "%.0f"|format(state.atm_iv.call * 100) }}{% else %}—{% endif %}</span>
+                </span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Net Premium</span>
+                <span class="stat-value" id="stat-net-premium"
+                      style="color: {% if state.total_premium is not none %}{% if state.total_premium >= 0 %}var(--green){% else %}var(--red){% endif %}{% else %}var(--muted){% endif %}">
+                    {% if state.total_premium is not none %}{{ "%.1f"|format(state.total_premium / 1000000) }}M{% else %}—{% endif %}
                 </span>
             </div>
         </div>
@@ -790,9 +797,20 @@
                 const ivCallEl = document.getElementById('iv-call');
                 if (data.atm_iv) {
                     ivPutEl.textContent = data.atm_iv.put !== null
-                        ? (data.atm_iv.put * 100).toFixed(2) + '%' : '—';
+                        ? Math.round(data.atm_iv.put * 100) : '—';
                     ivCallEl.textContent = data.atm_iv.call !== null
-                        ? (data.atm_iv.call * 100).toFixed(2) + '%' : '—';
+                        ? Math.round(data.atm_iv.call * 100) : '—';
+                }
+
+                // Net Premium (call - put) in millions
+                const netPremEl = document.getElementById('stat-net-premium');
+                if (data.total_premium !== null && data.total_premium !== undefined) {
+                    const val = data.total_premium;
+                    netPremEl.textContent = (val / 1000000).toFixed(1) + 'M';
+                    netPremEl.style.color = val >= 0 ? 'var(--green)' : 'var(--red)';
+                } else {
+                    netPremEl.textContent = '—';
+                    netPremEl.style.color = 'var(--muted)';
                 }
 
                 // Pulse animation
