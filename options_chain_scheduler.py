@@ -503,12 +503,30 @@ class OptionsChainScheduler:
         call_spreads = self._find_credit_call_spreads(calls, current_price)
         put_spreads  = self._find_credit_put_spreads(puts, current_price)
 
+        # ── ATM implied-volatility ────────────────────────────
+        atm_call_iv: Optional[float] = None
+        atm_put_iv:  Optional[float] = None
+        if calls:
+            atm_call_strike = min(calls.keys(), key=lambda s: abs(s - current_price))
+            atm_call_iv = round(calls[atm_call_strike].iv, 4)
+        if puts:
+            atm_put_strike = min(puts.keys(), key=lambda s: abs(s - current_price))
+            atm_put_iv = round(puts[atm_put_strike].iv, 4)
+        self.log.info(
+            "ATM IV — Call: %s  Put: %s  (price %.2f)",
+            atm_call_iv, atm_put_iv, current_price,
+        )
+
         now = _now_est()
         result = {
             "symbol": self._underlying,
             "current_price": current_price,
             "expiration": expiration.strftime("%Y-%m-%d"),
             "timestamp": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            "atm_iv": {
+                "call": atm_call_iv,
+                "put": atm_put_iv,
+            },
             "filter_criteria": {
                 "max_delta": self._max_delta,
                 "min_premium": self._min_premium,

@@ -30,7 +30,7 @@ DIVERGENCE_BARS   = 5     # bars to check RSI divergence
 
 EST = timezone(timedelta(hours=-5))
 MAX_BARS_PER_REQUEST = 57_600
-CONFIG_PATH = "config.yaml"
+CONFIG_PATH = "yaml/config.yaml"
 TOKEN_PATH  = "./json/ts_token.json"
 
 LOG = logging.getLogger("back_test_ex")
@@ -288,9 +288,10 @@ class _BarFetcher:
 # ============================================================
 
 class BackTestEx:
-    def __init__(self, years, symbol="$SPX.X", config_path=CONFIG_PATH):
+    def __init__(self, years, symbol="$SPX.X", config_path=CONFIG_PATH, rows_mode='exhaustion'):
         self.years = years
         self.symbol = symbol
+        self.rows_mode = rows_mode
         self.bars = []
         self.results = []
 
@@ -689,9 +690,21 @@ class BackTestEx:
     # RUN & CSV OUTPUT
     # ============================================================
 
+    def _build_daily_close_map(self) -> Dict[str, float]:
+        """Build a map of date string → daily close price (last bar of each day)."""
+        daily_close: Dict[str, float] = {}
+        est_tz = ZoneInfo('America/New_York')
+        for bar in self.bars:
+            date_str = bar['datetime'].astimezone(est_tz).strftime('%Y-%m-%d')
+            daily_close[date_str] = bar['close']
+        return daily_close
+
     def run(self):
         self.fetch_5min_bars()
         self.attach_indicators()
+
+        # Pre-compute daily close prices (last bar close per date)
+        daily_close_map = self._build_daily_close_map()
 
         # Rolling window size — enough for all look-backs
         window_size = 100
@@ -708,25 +721,55 @@ class BackTestEx:
 
             signal = self.detect_exhaustion(window)
 
+            qualifying_signal = bool(
+                signal and signal['strength'] > 3 and (
+                    (signal['type'] == 'BEAR_EXHAUSTION' and bar['rsi'] is not None and bar['rsi'] < 32) or
+                    (signal['type'] == 'BULL_EXHAUSTION' and bar['rsi'] is not None and bar['rsi'] > 68)
+                )
+            )
+
             est_tz = ZoneInfo('America/New_York')
             est_time = bar['datetime'].astimezone(est_tz)
-            row = [
-                est_time.strftime('%Y-%m-%d %I:%M:%S %p'),
-                bar['open'],
-                bar['close'],
-                round(bar['rsi'], 2),
-            ]
-            if signal and signal['strength'] > 3 and (
-                (signal['type'] == 'BEAR_EXHAUSTION' and bar['rsi'] is not None and bar['rsi'] < 32) or
-                (signal['type'] == 'BULL_EXHAUSTION' and bar['rsi'] is not None and bar['rsi'] > 68)
-            ):
-                row.append(signal['type'])
-                row.append(signal['strength'])
-                row.append('; '.join(signal['reasons']))
-            else:
-                row.extend(['', '', ''])
+            date_key = est_time.strftime('%Y-%m-%d')
+            todays_close = daily_close_map.get(date_key, '')
 
-            self.results.append(row)
+            # Include either all candles or only candles with a qualifying exhaustion signal
+            if self.rows_mode == 'all' or qualifying_signal:
+                diff = ''
+                signal_type = ''
+                signal_strength = ''
+                signal_reasons = ''
+
+                if qualifying_signal:
+                    signal_type = signal['type']
+                    signal_strength = signal['strength']
+                    signal_reasons = '; '.join(signal['reasons'])
+
+                    if todays_close != '':
+                        diff_value = round(abs(bar['close'] - todays_close), 2)
+
+                        if (
+                            (signal['type'] == 'BEAR_EXHAUSTION' and todays_close < bar['close']) or
+                            (signal['type'] == 'BULL_EXHAUSTION' and todays_close > bar['close'])
+                        ):
+                            diff = f"({diff_value})"
+                        else:
+                            diff = diff_value
+                elif todays_close != '':
+                    diff = round(abs(bar['close'] - todays_close), 2)
+
+                row = [
+                    est_time.strftime('%Y-%m-%d %I:%M:%S %p'),
+                    bar['open'],
+                    bar['close'],
+                    todays_close,
+                    diff,
+                    round(bar['rsi'], 2),
+                    signal_type,
+                    signal_strength,
+                    signal_reasons,
+                ]
+                self.results.append(row)
 
         self.write_csv()
         print(f"Backtest complete — {len(self.results)} rows written to backtest_ex_results.csv")
@@ -738,6 +781,8 @@ class BackTestEx:
                 'Date & Time (EST)',
                 'Candle Open',
                 'Candle Close',
+                "Today's Close",
+                'Diff',
                 'Close RSI',
                 'Exhaustion Type',
                 'Exhaustion Strength',
@@ -750,10 +795,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Back Testing Strategy — Exhaustion Detector')
     parser.add_argument('--years', type=int, required=True, help='Number of years to backtest')
     parser.add_argument('--symbol', type=str, default='$SPX.X', help='TradeStation symbol (default: $SPX.X)')
+    parser.add_argument('--rows', type=str, default='exhaustion', choices=['all', 'exhaustion'],
+                        help='CSV row mode: all candles or only exhaustion candles (default: exhaustion)')
     parser.add_argument('--config', type=str, default=CONFIG_PATH, help='Path to config.yaml')
     parser.add_argument('--log-level', type=str, default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], help='Logging level')
     args = parser.parse_args()
     _setup_logging(args.log_level)
-    bt = BackTestEx(args.years, symbol=args.symbol, config_path=args.config)
+    bt = BackTestEx(args.years, symbol=args.symbol, config_path=args.config, rows_mode=args.rows)
     bt.run()

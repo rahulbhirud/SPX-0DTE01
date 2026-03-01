@@ -24,6 +24,7 @@ from flask import Flask, jsonify, render_template, request
 app = Flask(__name__, template_folder="templates")
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "dashboard_state.json")
+OPTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "options_data_config.json")
 
 
 def _read_state() -> dict:
@@ -45,19 +46,43 @@ def _read_state() -> dict:
             "volume": "—",
             "status": "",
             "exhaustion": None,
+            "atm_iv": {"call": None, "put": None},
+            "market_open": True,
+            "projected_open": None,
+            "spy_pct_change": None,
         }
+
+
+def _read_options_data() -> dict:
+    """Read ATM IV and other stats from options_data_config.json."""
+    try:
+        with open(OPTIONS_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _enrich_state(state: dict) -> dict:
+    """Merge market stats (ATM IV, etc.) into the dashboard state."""
+    opts = _read_options_data()
+    atm_iv = opts.get("atm_iv")
+    if atm_iv and isinstance(atm_iv, dict):
+        state["atm_iv"] = atm_iv
+    else:
+        state.setdefault("atm_iv", {"call": None, "put": None})
+    return state
 
 
 @app.route("/")
 def index():
-    state = _read_state()
+    state = _enrich_state(_read_state())
     return render_template("dashboard.html", state=state)
 
 
 @app.route("/api/state")
 def api_state():
     """JSON endpoint for AJAX polling."""
-    return jsonify(_read_state())
+    return jsonify(_enrich_state(_read_state()))
 
 
 # ── Trade execution endpoints ─────────────────────────────────

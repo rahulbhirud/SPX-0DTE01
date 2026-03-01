@@ -90,6 +90,7 @@
 
         .card-price::before { background: var(--blue); }
         .card-rsi::before { background: var(--purple); }
+        .card-stats::before { background: var(--amber); }
 
         .card-label {
             font-size: 12px;
@@ -142,6 +143,64 @@
         .rsi-oversold { color: var(--green); }
         .rsi-overbought { color: var(--red); }
         .rsi-neutral { color: var(--text); }
+
+        /* ── Market Stats ──────────────────────────── */
+        .stats-section {
+            margin-bottom: 24px;
+        }
+
+        .stats-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stats-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: var(--amber);
+        }
+
+        .stats-title {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--muted);
+            margin-bottom: 12px;
+        }
+
+        .stats-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 24px;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--muted);
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-value {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .iv-put { color: var(--red); }
+        .iv-call { color: var(--green); }
+        .iv-separator { color: var(--muted); margin: 0 2px; }
 
         /* Reversal status & event log styles removed */
 
@@ -491,7 +550,7 @@
 <div class="cards">
     <div class="card card-price">
         <div class="card-label">SPX Price</div>
-        <div class="card-value" id="spx-price">{{ state.price }}</div>
+        <div class="card-value" id="spx-price">{{ state.price }}<span id="projected-open" style="font-size:16px; font-weight:600; margin-left:8px; display:none;"></span></div>
         <div class="card-sub" id="price-ts" data-utc="{{ state.timestamp }}">{{ state.timestamp }}</div>
         <div class="candle-details" style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:4px 16px; font-size:12px;">
             <div><span style="color:var(--muted)">O</span> <span id="candle-open">{{ state.open if state.open is defined else '—' }}</span></div>
@@ -522,6 +581,21 @@
 </div>
 
 <!-- Reversal detector UI removed -->
+
+<!-- ── Market Stats ─────────────────────────────────── -->
+<div class="stats-section">
+    <div class="stats-card">
+        <div class="stats-title">Market Stats</div>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <span class="stat-label">P/C IV</span>
+                <span class="stat-value" id="stat-pc-iv">
+                    <span class="iv-put" id="iv-put">{% if state.atm_iv and state.atm_iv.put is not none %}{{ "%.2f"|format(state.atm_iv.put * 100) }}%{% else %}—{% endif %}</span><span class="iv-separator">/</span><span class="iv-call" id="iv-call">{% if state.atm_iv and state.atm_iv.call is not none %}{{ "%.2f"|format(state.atm_iv.call * 100) }}%{% else %}—{% endif %}</span>
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="trade-row">
     <button class="trade-btn btn-call" id="btn-open-call" onclick="openSpread('call')" title="Open Call Credit Spread">▲</button>
@@ -645,9 +719,29 @@
         fetch('/api/state')
             .then(r => r.json())
             .then(data => {
-                // Price
-                document.getElementById('spx-price').textContent = data.price;
+                // Price – update only the text node, preserving the projected-open span
+                const priceEl = document.getElementById('spx-price');
+                const projSpan = document.getElementById('projected-open');
+                // Replace only the first text node (the price)
+                if (priceEl.childNodes.length && priceEl.childNodes[0].nodeType === Node.TEXT_NODE) {
+                    priceEl.childNodes[0].textContent = data.price;
+                } else {
+                    priceEl.insertBefore(document.createTextNode(data.price), projSpan);
+                }
                 document.getElementById('price-ts').textContent = toEST(data.timestamp);
+
+                // Projected next open (shown only when market is closed)
+                if (!data.market_open && data.projected_open !== null && data.projected_open !== undefined) {
+                    const spxPrice = parseFloat(data.price);
+                    const proj = data.projected_open;
+                    const color = proj >= spxPrice ? 'var(--green)' : 'var(--red)';
+                    projSpan.style.display = 'inline';
+                    projSpan.style.color = color;
+                    projSpan.textContent = '(' + proj.toFixed(2) + ')';
+                } else {
+                    projSpan.style.display = 'none';
+                    projSpan.textContent = '';
+                }
 
                 // RSI
                 const rsiEl = document.getElementById('rsi-value');
@@ -685,6 +779,16 @@
                 } else {
                     exhEl.style.display = 'none';
                     exhEl.textContent = '';
+                }
+
+                // ATM IV stats
+                const ivPutEl = document.getElementById('iv-put');
+                const ivCallEl = document.getElementById('iv-call');
+                if (data.atm_iv) {
+                    ivPutEl.textContent = data.atm_iv.put !== null
+                        ? (data.atm_iv.put * 100).toFixed(2) + '%' : '—';
+                    ivCallEl.textContent = data.atm_iv.call !== null
+                        ? (data.atm_iv.call * 100).toFixed(2) + '%' : '—';
                 }
 
                 // Pulse animation

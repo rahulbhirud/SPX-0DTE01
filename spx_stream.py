@@ -626,6 +626,10 @@ class SPXStreamer:
         self._position_tracker = PositionTracker(cfg, token_mgr, logger)
         self._shutdown_event = threading.Event()  # For interruptible sleeps
 
+        # Projected-open cache (refreshed each candle tick)
+        self._projected_open: Optional[float] = None
+        self._spy_pct_change: Optional[float] = None
+
     # ──────────────────────────────────────────────────────────
     # Candle handler
     # ──────────────────────────────────────────────────────────
@@ -683,17 +687,82 @@ class SPXStreamer:
         * BEAR_EXHAUSTION → open a **put** credit spread (expect reversal up)
         """
         sig_type = exhaustion.get("type", "")
+        # disabled Auto Trading. Please use the dashboard buttons to open spreads manually after exhaustion signals.
+        # try:
+        #     if sig_type == "BULL_EXHAUSTION":
+        #         self.log.info("Bull exhaustion detected — opening call credit spread")
+        #         self._trader.open_call_credit_spread()
+        #     elif sig_type == "BEAR_EXHAUSTION":
+        #         self.log.info("Bear exhaustion detected — opening put credit spread")
+        #         self._trader.open_put_credit_spread()
+        #     else:
+        #         self.log.warning("Unknown exhaustion type: %s — skipping trade", sig_type)
+        # except Exception as exc:
+        #     self.log.error("Failed to open spread on %s: %s", sig_type, exc)
+
+    # ──────────────────────────────────────────────────────────
+    # Market-hours helper
+    # ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_market_open() -> bool:
+        """Return True if current time is within regular US equity hours
+        (9:30 AM – 4:00 PM ET) on a weekday."""
+        import datetime as _dt
+        from zoneinfo import ZoneInfo
+        est = ZoneInfo("America/New_York")
+        now = _dt.datetime.now(est)
+        if now.weekday() >= 5:          # Saturday/Sunday
+            return False
+        t = now.time()
+        return _dt.time(9, 30) <= t <= _dt.time(16, 0)
+
+    # ──────────────────────────────────────────────────────────
+    # SPY-based projected next open
+    # ──────────────────────────────────────────────────────────
+
+    def _compute_projected_open(self, spx_price: float) -> None:
+        """Fetch the current SPY quote, compute % change from its previous
+        close, and apply that to *spx_price* to project the next SPX open.
+
+        Results are cached in ``self._projected_open`` / ``self._spy_pct_change``.
+        Only meaningful when the market is **closed**.
+        """
         try:
-            if sig_type == "BULL_EXHAUSTION":
-                self.log.info("Bull exhaustion detected — opening call credit spread")
-                self._trader.open_call_credit_spread()
-            elif sig_type == "BEAR_EXHAUSTION":
-                self.log.info("Bear exhaustion detected — opening put credit spread")
-                self._trader.open_put_credit_spread()
-            else:
-                self.log.warning("Unknown exhaustion type: %s — skipping trade", sig_type)
+            sym = requests.utils.quote("SPY", safe="")
+            url = f"{self.cfg.base_url}/marketdata/quotes/{sym}"
+            token = self.token_mgr.get_access_token()
+            resp = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            quotes = resp.json().get("Quotes", [])
+            if not quotes:
+                self.log.debug("SPY quote: no data returned.")
+                return
+
+            q = quotes[0]
+            spy_last  = _safe_float(q.get("Last"))
+            spy_close = _safe_float(q.get("PreviousClose")) or _safe_float(q.get("Close"))
+
+            if not spy_last or not spy_close or spy_close == 0:
+                self.log.debug("SPY quote: missing Last/PreviousClose.")
+                return
+
+            pct = (spy_last - spy_close) / spy_close
+            projected = round(spx_price * (1 + pct), 2)
+
+            self._spy_pct_change = round(pct * 100, 4)
+            self._projected_open = projected
+            self.log.debug(
+                "SPY projected open: SPY last=%.2f prev_close=%.2f chg=%.4f%%  "
+                "→ SPX projected=%.2f",
+                spy_last, spy_close, pct * 100, projected,
+            )
         except Exception as exc:
-            self.log.error("Failed to open spread on %s: %s", sig_type, exc)
+            self.log.debug("SPY projected open fetch failed: %s", exc)
 
     # ──────────────────────────────────────────────────────────
     # Dashboard State Writer
@@ -708,6 +777,16 @@ class SPXStreamer:
         rsi_val = self._rsi.current_rsi()
         rsi_display = round(rsi_val, 2) if rsi_val is not None else None
 
+        # Compute projected open when market is closed
+        market_open = self._is_market_open()
+        spx_close = _safe_float(candle.get("Close"))
+        if not market_open and spx_close:
+            self._compute_projected_open(spx_close)
+        elif market_open:
+            # Clear stale projection during trading hours
+            self._projected_open = None
+            self._spy_pct_change = None
+
         state = {
             "price": str(candle.get("Close", "—")),
             "rsi": rsi_display,
@@ -721,6 +800,9 @@ class SPXStreamer:
             "volume": str(candle.get("TotalVolume", "—")),
             "status": candle.get("Status", ""),
             "exhaustion": exhaustion,
+            "market_open": market_open,
+            "projected_open": self._projected_open,
+            "spy_pct_change": self._spy_pct_change,
         }
         try:
             tmp = self._STATE_FILE + ".tmp"
