@@ -564,7 +564,6 @@
             <div><span style="color:var(--muted)">Vol</span> <span id="candle-vol">{{ state.volume if state.volume is defined else '—' }}</span></div>
             <div><span style="color:var(--muted)">Status</span> <span id="candle-status">{{ state.status if state.status is defined else '' }}</span></div>
         </div>
-        <div id="candle-exhaustion" style="margin-top:8px; font-size:12px; font-weight:600; display:none;"></div>
     </div>
     <div class="card card-rsi">
         <div class="card-label">RSI({{ state.rsi_period }})</div>
@@ -813,21 +812,6 @@
                 document.getElementById('candle-close').textContent = data.close || '—';
                 document.getElementById('candle-vol').textContent = data.volume || '—';
                 document.getElementById('candle-status').textContent = data.status || '';
-
-                // Exhaustion signal
-                const exhEl = document.getElementById('candle-exhaustion');
-                if (data.exhaustion) {
-                    const exh = data.exhaustion;
-                    const isBull = exh.type === 'BULL_EXHAUSTION';
-                    exhEl.style.display = 'block';
-                    exhEl.style.color = isBull ? 'var(--red)' : 'var(--green)';
-                    exhEl.textContent = (isBull ? '🐂 BULL' : '🐻 BEAR') +
-                        ' EXHAUSTION  str=' + exh.strength +
-                        (exh.reasons ? '  (' + exh.reasons.join(', ') + ')' : '');
-                } else {
-                    exhEl.style.display = 'none';
-                    exhEl.textContent = '';
-                }
 
                 // ATM IV stats
                 const ivPutEl = document.getElementById('iv-put');

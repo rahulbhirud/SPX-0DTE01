@@ -29,7 +29,6 @@ import webbrowser
 from collections import deque
 from dataclasses import dataclass
 
-from exhaustion_detector import ExhaustionDetector
 from options_trader import OptionsTrader
 from position_tracker import PositionTracker
 from datetime import datetime, timezone
@@ -659,7 +658,6 @@ class SPXStreamer:
         self._running  = False
         self._response = None          # active streaming response (for clean shutdown)
         self._rsi      = RSIAnalyzer(cfg, logger)
-        self._exhaustion = ExhaustionDetector()
         self._trader = OptionsTrader(cfg, token_mgr, logger)
         self._position_tracker = PositionTracker(cfg, token_mgr, logger)
         self._shutdown_event = threading.Event()  # For interruptible sleeps
@@ -700,20 +698,6 @@ class SPXStreamer:
         # ── Persist candle to daily JSON file ────────────────
         daily_path = self._save_candle_to_daily_json(candle)
 
-        # ── Run exhaustion detection on latest candle ────────
-        exh = None
-        if daily_path:
-            try:
-                exh = self._exhaustion.process_latest_candle(daily_path)
-                if exh:
-                    self.log.info(
-                        "🔔 %s  strength=%d  reasons=%s",
-                        exh["type"], exh["strength"], "; ".join(exh["reasons"]),
-                    )
-                    self._open_spread_on_exhaustion(exh)
-            except Exception as exc:
-                self.log.warning("Exhaustion detection error: %s", exc)
-
         # ── RSI 14 / MA 9 crossover signal ────────────────
         self._check_rsi_crossover()
 
@@ -724,7 +708,7 @@ class SPXStreamer:
         )
 
         # ── Update dashboard state file ──────────────────────
-        self._write_dashboard_state(candle, exh)
+        self._write_dashboard_state(candle)
 
     # ──────────────────────────────────────────────────────────
     # RSI 14 / MA 9 crossover trading
@@ -881,30 +865,6 @@ class SPXStreamer:
                 self._ma_at_last_crossover = ma9
 
     # ──────────────────────────────────────────────────────────
-    # Auto-open spread on exhaustion
-    # ──────────────────────────────────────────────────────────
-
-    def _open_spread_on_exhaustion(self, exhaustion: dict) -> None:
-        """Open a credit spread when an exhaustion signal is detected.
-
-        * BULL_EXHAUSTION → open a **call** credit spread (expect reversal down)
-        * BEAR_EXHAUSTION → open a **put** credit spread (expect reversal up)
-        """
-        sig_type = exhaustion.get("type", "")
-        # disabled Auto Trading. Please use the dashboard buttons to open spreads manually after exhaustion signals.
-        try:
-            if sig_type == "BULL_EXHAUSTION":
-                self.log.info("Bull exhaustion detected — opening call credit spread")
-                self._trader.open_call_credit_spread()
-            elif sig_type == "BEAR_EXHAUSTION":
-                self.log.info("Bear exhaustion detected — opening put credit spread")
-                self._trader.open_put_credit_spread()
-            else:
-                self.log.warning("Unknown exhaustion type: %s — skipping trade", sig_type)
-        except Exception as exc:
-            self.log.error("Failed to open spread on %s: %s", sig_type, exc)
-
-    # ──────────────────────────────────────────────────────────
     # Market-hours helper
     # ──────────────────────────────────────────────────────────
 
@@ -972,7 +932,7 @@ class SPXStreamer:
     # Dashboard State Writer
     # ──────────────────────────────────────────────────────────
 
-    def _write_dashboard_state(self, candle: dict, exhaustion: Optional[dict] = None):
+    def _write_dashboard_state(self, candle: dict):
         """Write current state to a JSON file for the dashboard UI."""
         import datetime as _dt
         est = _dt.timezone(_dt.timedelta(hours=-5), "EST")
@@ -1010,7 +970,6 @@ class SPXStreamer:
             "close": str(candle.get("Close", "—")),
             "volume": str(candle.get("TotalVolume", "—")),
             "status": candle.get("Status", ""),
-            "exhaustion": exhaustion,
             "rsi_14": rsi14_display,
             "rsi_14_ma_9": rsi14_ma_display,
             "market_open": market_open,
@@ -1052,6 +1011,7 @@ class SPXStreamer:
 
         # Build the record to persist
         rsi_val = self._rsi.current_rsi()
+        rsi_ma_val = self._rsi.current_rsi_ma(self.cfg.rsi_ma_period if self.cfg else 9)
         record = {
             "TimeStamp":   ts_est_str,
             "Open":        candle.get("Open", ""),
@@ -1061,6 +1021,7 @@ class SPXStreamer:
             "TotalVolume": candle.get("TotalVolume", ""),
             "Status":      candle.get("Status", ""),
             "RSI":         round(rsi_val, 4) if rsi_val is not None else None,
+            "RSI_MA":      round(rsi_ma_val, 4) if rsi_ma_val is not None else None,
         }
 
         try:
