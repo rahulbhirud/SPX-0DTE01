@@ -17,3 +17,10 @@ keygen.pub
 .gitignore
 deploy.sh
 keygen
+run.sh
+
+# Backtest artifacts
+back_test/
+
+# Shell scripts
+shell/

@@ -348,6 +348,11 @@ class OptionsChainScheduler:
         "json", "stream_data", "total_premium.json",
     )
 
+    ALL_OPTIONS_FILE = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "json", "stream_data", "all_options_data.json",
+    )
+
     def _calculate_total_premiums(
         self, calls: Dict[float, OptionLeg], puts: Dict[float, OptionLeg]
     ) -> tuple:
@@ -398,6 +403,51 @@ class OptionsChainScheduler:
             )
         except Exception as exc:
             self.log.error("Failed to write %s: %s", self.PREMIUM_FILE, exc)
+
+    def _save_all_options_data(
+        self,
+        calls: Dict[float, OptionLeg],
+        puts: Dict[float, OptionLeg],
+        current_price: float,
+        expiration: date,
+    ) -> None:
+        """Save the full (unfiltered) options chain to all_options_data.json.
+
+        Overwrites on each scheduler run with the latest snapshot.
+        """
+        now = _now_est()
+        price_sq = current_price ** 2
+        data = {
+            "symbol": self._underlying,
+            "current_price": current_price,
+            "expiration": expiration.strftime("%Y-%m-%d"),
+            "timestamp": now.isoformat(),
+            "calls": [
+                {**asdict(calls[s]),
+                 "gex": round(calls[s].open_interest * calls[s].gamma * 100 * price_sq, 2),
+                 "vol_gex": round(calls[s].volume * calls[s].gamma, 4)}
+                for s in sorted(calls.keys())
+            ],
+            "puts": [
+                {**asdict(puts[s]),
+                 "gex": round(puts[s].open_interest * puts[s].gamma * 100 * price_sq, 2),
+                 "vol_gex": round(puts[s].volume * puts[s].gamma, 4)}
+                for s in sorted(puts.keys())
+            ],
+        }
+
+        try:
+            os.makedirs(os.path.dirname(self.ALL_OPTIONS_FILE), exist_ok=True)
+            tmp = self.ALL_OPTIONS_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, self.ALL_OPTIONS_FILE)
+            self.log.info(
+                "All options data saved → %d calls, %d puts",
+                len(calls), len(puts),
+            )
+        except Exception as exc:
+            self.log.error("Failed to write %s: %s", self.ALL_OPTIONS_FILE, exc)
 
     # ──────────────────────────────────────────────────────────
     # Spread identification
@@ -563,6 +613,9 @@ class OptionsChainScheduler:
         # ── Total premium (entire chain, before spread filtering) ──
         call_premium, put_premium = self._calculate_total_premiums(calls, puts)
         self._save_total_premiums(call_premium, put_premium)
+
+        # ── Save full (unfiltered) options chain ──
+        self._save_all_options_data(calls, puts, current_price, expiration)
 
         call_spreads = self._find_credit_call_spreads(calls, current_price)
         put_spreads  = self._find_credit_put_spreads(puts, current_price)
