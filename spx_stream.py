@@ -760,19 +760,19 @@ class SPXStreamer:
                 "🟢 BULL crossover | RSI14=%.2f crossed above MA9=%.2f — opening put credit spread",
                 rsi14, ma9,
             )
-            try:
-                self._trader.open_put_credit_spread()
-            except Exception as exc:
-                self.log.error("Failed to open put credit spread on bull crossover: %s", exc)
+            # try:
+            #     self._trader.open_put_credit_spread()
+            # except Exception as exc:
+            #     self.log.error("Failed to open put credit spread on bull crossover: %s", exc)
         else:
             self.log.info(
                 "🔴 BEAR crossover | RSI14=%.2f crossed below MA9=%.2f — opening call credit spread",
                 rsi14, ma9,
             )
-            try:
-                self._trader.open_call_credit_spread()
-            except Exception as exc:
-                self.log.error("Failed to open call credit spread on bear crossover: %s", exc)
+            # try:
+            #     self._trader.open_call_credit_spread()
+            # except Exception as exc:
+            #     self.log.error("Failed to open call credit spread on bear crossover: %s", exc)
 
     # ──────────────────────────────────────────────────────────
     # Auto-open spread on exhaustion
