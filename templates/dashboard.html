@@ -571,9 +571,29 @@
         <div class="card-value" id="rsi-value">
             {% if state.rsi is not none %}{{ "%.2f"|format(state.rsi) }}{% else %}—{% endif %}
         </div>
-        <div class="rsi-bar">
+        <!-- RSI 14 / MA 9 sub-row -->
+        <div style="display:flex; gap:18px; margin-top:10px; font-size:14px; align-items:baseline;">
+            <div>
+                <span style="color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:1px;">RSI 14</span>
+                <span id="rsi14-value" style="margin-left:6px; font-weight:700; font-size:16px;">
+                    {% if state.rsi_14 is not none %}{{ "%.2f"|format(state.rsi_14) }}{% else %}—{% endif %}
+                </span>
+            </div>
+            <div>
+                <span style="color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:1px;">MA 9</span>
+                <span id="rsi14-ma-value" style="margin-left:6px; font-weight:700; font-size:16px; color:var(--amber);">
+                    {% if state.rsi_14_ma_9 is not none %}{{ "%.2f"|format(state.rsi_14_ma_9) }}{% else %}—{% endif %}
+                </span>
+            </div>
+        </div>
+        <div class="rsi-bar" style="margin-top:12px;">
             <div class="rsi-marker" id="rsi-marker"
                  style="left: {% if state.rsi is not none %}{{ state.rsi }}%{% else %}50%{% endif %}">
+            </div>
+            <!-- RSI 14 marker (slightly smaller, amber) -->
+            <div class="rsi-marker" id="rsi14-marker"
+                 style="left: {% if state.rsi_14 is not none %}{{ state.rsi_14 }}%{% else %}50%{% endif %};
+                        background: var(--amber); width:10px; height:10px; top:-2px; border:2px solid var(--bg);">
             </div>
         </div>
         <div class="rsi-zones">
@@ -764,6 +784,23 @@
                     marker.style.background = getRsiColor(data.rsi);
                 } else {
                     rsiEl.textContent = '—';
+                }
+
+                // RSI 14 & MA 9
+                const rsi14El = document.getElementById('rsi14-value');
+                const rsi14Marker = document.getElementById('rsi14-marker');
+                const rsi14MaEl = document.getElementById('rsi14-ma-value');
+                if (data.rsi_14 !== null && data.rsi_14 !== undefined) {
+                    rsi14El.textContent = data.rsi_14.toFixed(2);
+                    rsi14El.style.color = getRsiColor(data.rsi_14);
+                    rsi14Marker.style.left = data.rsi_14 + '%';
+                } else {
+                    rsi14El.textContent = '—';
+                }
+                if (data.rsi_14_ma_9 !== null && data.rsi_14_ma_9 !== undefined) {
+                    rsi14MaEl.textContent = data.rsi_14_ma_9.toFixed(2);
+                } else {
+                    rsi14MaEl.textContent = '—';
                 }
 
                 // Timestamp

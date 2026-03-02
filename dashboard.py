@@ -47,6 +47,8 @@ def _read_state() -> dict:
             "volume": "—",
             "status": "",
             "exhaustion": None,
+            "rsi_14": None,
+            "rsi_14_ma_9": None,
             "atm_iv": {"call": None, "put": None},
             "market_open": True,
             "projected_open": None,
