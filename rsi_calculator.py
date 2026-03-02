@@ -4,30 +4,39 @@ import numpy as np
 
 def calculate_rsi(closes: pd.Series, period: int = 14) -> pd.Series:
     """
-    Calculate RSI using Wilder's smoothing method (exponential moving average).
+    Calculate RSI using Wilder's smoothing method (RMA), seeded with SMA.
 
-    This matches the standard RSI calculation used by TradingView, thinkorswim,
-    and most professional charting platforms.
+    This matches the exact RSI calculation used by TradingView:
+      1. Compute price changes (gains / losses).
+      2. Seed the first average gain/loss as the SMA of the first
+         ``period`` changes.
+      3. Subsequent values use Wilder's recursive formula:
+             avg = (prev_avg * (period - 1) + current) / period
 
     Args:
         closes: Series of closing prices (5-min candle closes).
         period: RSI lookback period (default 14).
 
     Returns:
-        Series of RSI values.
+        Series of RSI values (NaN for the first ``period`` bars).
     """
     delta = closes.diff()
 
     gains = delta.clip(lower=0.0)
     losses = (-delta).clip(lower=0.0)
 
-    # Wilder's smoothing: EMA with alpha = 1/period
-    # First value is SMA over the initial `period` bars,
-    # then each subsequent value uses the recursive formula:
-    #   avg = prev_avg * (period - 1) / period + current / period
-    alpha = 1.0 / period
-    avg_gain = gains.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
-    avg_loss = losses.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
+    # Pre-fill with NaN
+    avg_gain = pd.Series(np.nan, index=closes.index, dtype=float)
+    avg_loss = pd.Series(np.nan, index=closes.index, dtype=float)
+
+    # Seed: SMA of the first `period` changes (indices 1 .. period)
+    avg_gain.iloc[period] = gains.iloc[1 : period + 1].mean()
+    avg_loss.iloc[period] = losses.iloc[1 : period + 1].mean()
+
+    # Wilder's recursive smoothing for the remaining bars
+    for i in range(period + 1, len(closes)):
+        avg_gain.iloc[i] = (avg_gain.iloc[i - 1] * (period - 1) + gains.iloc[i]) / period
+        avg_loss.iloc[i] = (avg_loss.iloc[i - 1] * (period - 1) + losses.iloc[i]) / period
 
     rs = avg_gain / avg_loss
     rsi = 100.0 - (100.0 / (1.0 + rs))

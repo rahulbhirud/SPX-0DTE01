@@ -8,6 +8,7 @@ for the configured TradeStation account.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List
 
 import requests
@@ -40,6 +41,9 @@ class OrderTracker:
         "FLL"
     }
 
+    _MAX_RETRIES = 3
+    _BASE_DELAY  = 2.0
+
     def __init__(self, cfg, token_mgr, logger: logging.Logger):
         self.cfg = cfg
         self.token_mgr = token_mgr
@@ -50,30 +54,48 @@ class OrderTracker:
 
         This method fetches account orders from the brokerage endpoint,
         then filters the response to orders in open/working states.
+        Retries up to ``_MAX_RETRIES`` times on HTTP 429.
         """
         url = f"{self.cfg.base_url}/brokerage/accounts/{self.cfg.account_id}/orders"
-        token = self.token_mgr.get_access_token()
-        headers = {"Authorization": f"Bearer {token}"}
 
-        self.log.debug("Fetching account orders from %s", url)
-        resp = requests.get(url, headers=headers, timeout=20)
-        if not resp.ok:
-            self.log.error(
-                "Open-orders request failed (HTTP %d): %s",
-                resp.status_code,
-                self._extract_resp_body(resp),
-            )
-            resp.raise_for_status()
+        for attempt in range(1, self._MAX_RETRIES + 1):
+            token = self.token_mgr.get_access_token()
+            headers = {"Authorization": f"Bearer {token}"}
 
-        body = resp.json()
-        orders = self._extract_orders(body)
-        if not isinstance(orders, list):
-            self.log.warning("Unexpected orders response shape; expected a list of order objects.")
-            return []
+            self.log.debug("Fetching account orders from %s (attempt %d)", url, attempt)
+            resp = requests.get(url, headers=headers, timeout=20)
 
-        open_orders = [order for order in orders if self._is_open_order(order)]
-        self.log.info("Found %d open orders (out of %d total).", len(open_orders), len(orders))
-        return open_orders
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                delay = float(retry_after) if retry_after else self._BASE_DELAY * (2 ** (attempt - 1))
+                self.log.warning(
+                    "429 Too Many Requests on orders (attempt %d/%d). Backing off %.1fs…",
+                    attempt, self._MAX_RETRIES, delay,
+                )
+                if attempt < self._MAX_RETRIES:
+                    time.sleep(delay)
+                    continue
+                resp.raise_for_status()
+
+            if not resp.ok:
+                self.log.error(
+                    "Open-orders request failed (HTTP %d): %s",
+                    resp.status_code,
+                    self._extract_resp_body(resp),
+                )
+                resp.raise_for_status()
+
+            body = resp.json()
+            orders = self._extract_orders(body)
+            if not isinstance(orders, list):
+                self.log.warning("Unexpected orders response shape; expected a list of order objects.")
+                return []
+
+            open_orders = [order for order in orders if self._is_open_order(order)]
+            self.log.info("Found %d open orders (out of %d total).", len(open_orders), len(orders))
+            return open_orders
+
+        return []
 
     def cancel_order(self, order_id: str) -> Dict[str, Any]:
         """Cancel an order by order id and return API response JSON."""

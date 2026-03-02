@@ -314,8 +314,11 @@ class OptionsChainScheduler:
                     # non-new messages in a row.
 
                     current_count = len(calls) + len(puts)
-                    if(len(calls) >self._strike_proximity and len(puts) > self._strike_proximity):
-                        self.log.warning("Aborting options chain fetch: too many strikes received (calls=%d, puts=%d)", len(calls), len(puts))
+                    # Safety cap: abort if we receive far more strikes than
+                    # expected (3× proximity per side) to avoid runaway reads.
+                    max_per_side = self._strike_proximity * 3
+                    if len(calls) > max_per_side and len(puts) > max_per_side:
+                        self.log.warning("Aborting options chain fetch: too many strikes received (calls=%d, puts=%d, cap=%d)", len(calls), len(puts), max_per_side)
                         break
                     # if current_count > max_count:
                     #     max_count = current_count

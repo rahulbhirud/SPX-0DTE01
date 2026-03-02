@@ -2,7 +2,7 @@
 spx_stream.py
 ─────────────
 Streams 5-minute SPX candles from the TradeStation API.
-Calculates RSI(9) in real-time.
+Calculates RSI(14) with SMA(9) signal line in real-time (TradingView-compatible).
 
 Usage:
     python spx_stream.py                  # uses config.yaml in same folder
@@ -131,7 +131,11 @@ class Config:
 
     @property
     def rsi_period(self) -> int:
-        return int(self._raw.get("rsi", {}).get("period", 9))
+        return int(self._raw.get("rsi", {}).get("period", 14))
+
+    @property
+    def rsi_ma_period(self) -> int:
+        return int(self._raw.get("rsi", {}).get("ma_period", 9))
 
     @property
     def rsi_overbought(self) -> float:
@@ -426,7 +430,7 @@ class RSIAnalyzer:
         obj._avg_loss = None
         obj._rsi_ready = False
         obj._last_close = None
-        max_hist = period + 5
+        max_hist = max(period * 3, 50)
         obj._history = deque(maxlen=max_hist)
         obj._live_close = None
         obj._current_bar_ts = None
@@ -448,8 +452,8 @@ class RSIAnalyzer:
         self._rsi_ready                  = False
         self._last_close: Optional[float] = None
 
-        # Closed-bar history for RSI display
-        max_hist = self._period + 5
+        # Closed-bar history for RSI display & MA calculation
+        max_hist = max(self._period * 3, 50)
         self._history: Deque[BarSnapshot] = deque(maxlen=max_hist)
 
         # Current (live / open) bar tracking — for real-time RSI display
@@ -650,7 +654,6 @@ class SPXStreamer:
         self._running  = False
         self._response = None          # active streaming response (for clean shutdown)
         self._rsi      = RSIAnalyzer(cfg, logger)
-        self._rsi14    = RSIAnalyzer._make(period=14, logger=logger)
         self._exhaustion = ExhaustionDetector()
         self._trader = OptionsTrader(cfg, token_mgr, logger)
         self._position_tracker = PositionTracker(cfg, token_mgr, logger)
@@ -658,6 +661,9 @@ class SPXStreamer:
 
         # RSI crossover state: None = unknown, "above" = RSI14 > MA9, "below" = RSI14 < MA9
         self._rsi_cross_state: Optional[str] = None
+        # Track whether we already traded on the current crossover event.
+        # Reset to False each time the state flips.
+        self._rsi_cross_traded: bool = False
 
         # Projected-open cache (refreshed each candle tick)
         self._projected_open: Optional[float] = None
@@ -677,7 +683,6 @@ class SPXStreamer:
         status = candle.get("Status", "").lower()
 
         self._rsi.feed(candle)
-        self._rsi14.feed(candle)
 
         self.log.info(
             "[%-24s] O=%-9s H=%-9s L=%-9s C=%-9s Vol=%-8s [%-10s] | %s",
@@ -717,16 +722,34 @@ class SPXStreamer:
     # RSI 14 / MA 9 crossover trading
     # ──────────────────────────────────────────────────────────
 
+    def _has_open_spread(self, spread_type: str) -> bool:
+        """Return True if a spread of the given type is already open.
+
+        *spread_type* should be ``"Put Credit"`` or ``"Call Credit"``.
+        """
+        try:
+            spreads = self._position_tracker.get_open_spreads()
+            for s in spreads:
+                if s.spread_type == spread_type:
+                    return True
+        except Exception as exc:
+            self.log.warning("Could not check open spreads: %s", exc)
+        return False
+
     def _check_rsi_crossover(self) -> None:
         """Detect RSI 14 crossing above/below the RSI 9 MA and open spreads.
 
         * RSI 14 crosses **above** MA 9  → BULL signal → open **put** credit spread
         * RSI 14 crosses **below** MA 9  → BEAR signal → open **call** credit spread
 
-        Only fires on the actual crossover (state transition), not on every tick.
+        Guards:
+        1. Only fires on the actual crossover (state transition), not on every tick.
+        2. Only ONE trade per crossover event (``_rsi_cross_traded`` flag).
+        3. Checks ``PositionTracker`` — skips if a spread of the same type is
+           already open.
         """
-        rsi14 = self._rsi14.current_rsi()
-        ma9   = self._rsi14.current_rsi_ma(9)
+        rsi14 = self._rsi.current_rsi()
+        ma9   = self._rsi.current_rsi_ma(self.cfg.rsi_ma_period if self.cfg else 9)
 
         if rsi14 is None or ma9 is None:
             return
@@ -740,6 +763,11 @@ class SPXStreamer:
             return  # exactly equal — no signal
 
         prev_state = self._rsi_cross_state
+
+        # State changed → reset the traded flag so the new crossover can fire
+        if new_state != prev_state:
+            self._rsi_cross_traded = False
+
         self._rsi_cross_state = new_state
 
         # First reading — establish baseline, don't trade
@@ -754,25 +782,53 @@ class SPXStreamer:
         if new_state == prev_state:
             return
 
+        # Already traded on this crossover event — don't open another
+        if self._rsi_cross_traded:
+            self.log.debug(
+                "RSI crossover %s already traded — skipping",
+                new_state,
+            )
+            return
+
         # ── Crossover detected ────────────────────────────────
         if new_state == "above":
+            # Check for existing put credit spread
+            if self._has_open_spread("Put Credit"):
+                self.log.info(
+                    "🟢 BULL crossover | RSI14=%.2f above MA9=%.2f — put credit spread already open, skipping",
+                    rsi14, ma9,
+                )
+                self._rsi_cross_traded = True
+                return
+
             self.log.info(
                 "🟢 BULL crossover | RSI14=%.2f crossed above MA9=%.2f — opening put credit spread",
                 rsi14, ma9,
             )
-            # try:
-            #     self._trader.open_put_credit_spread()
-            # except Exception as exc:
-            #     self.log.error("Failed to open put credit spread on bull crossover: %s", exc)
+            try:
+                self._trader.open_put_credit_spread()
+                self._rsi_cross_traded = True
+            except Exception as exc:
+                self.log.error("Failed to open put credit spread on bull crossover: %s", exc)
         else:
+            # Check for existing call credit spread
+            if self._has_open_spread("Call Credit"):
+                self.log.info(
+                    "🔴 BEAR crossover | RSI14=%.2f below MA9=%.2f — call credit spread already open, skipping",
+                    rsi14, ma9,
+                )
+                self._rsi_cross_traded = True
+                return
+
             self.log.info(
                 "🔴 BEAR crossover | RSI14=%.2f crossed below MA9=%.2f — opening call credit spread",
                 rsi14, ma9,
             )
-            # try:
-            #     self._trader.open_call_credit_spread()
-            # except Exception as exc:
-            #     self.log.error("Failed to open call credit spread on bear crossover: %s", exc)
+            try:
+                self._trader.open_call_credit_spread()
+                self._rsi_cross_traded = True
+            except Exception as exc:
+                self.log.error("Failed to open call credit spread on bear crossover: %s", exc)
 
     # ──────────────────────────────────────────────────────────
     # Auto-open spread on exhaustion
@@ -875,10 +931,11 @@ class SPXStreamer:
         rsi_val = self._rsi.current_rsi()
         rsi_display = round(rsi_val, 2) if rsi_val is not None else None
 
-        # RSI 14 and its 9-period MA
-        rsi14_val = self._rsi14.current_rsi()
-        rsi14_display = round(rsi14_val, 2) if rsi14_val is not None else None
-        rsi14_ma = self._rsi14.current_rsi_ma(9)
+        # RSI and its MA signal line
+        ma_period = self.cfg.rsi_ma_period if self.cfg else 9
+        rsi14_val = rsi_val
+        rsi14_display = rsi_display
+        rsi14_ma = self._rsi.current_rsi_ma(ma_period)
         rsi14_ma_display = round(rsi14_ma, 2) if rsi14_ma is not None else None
 
         # Compute projected open when market is closed

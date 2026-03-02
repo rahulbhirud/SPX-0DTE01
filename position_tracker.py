@@ -135,7 +135,10 @@ class PositionTracker:
     """Fetches open positions, groups into credit spreads, and
     provides a background scheduler that logs spread status."""
 
-    POLL_INTERVAL = 5  # seconds
+    POLL_INTERVAL = 15  # seconds between background polls
+    _MAX_RETRIES = 3    # retry count on 429 / transient errors
+    _BASE_DELAY  = 2.0  # initial backoff delay (seconds)
+    _MIN_MONITOR_INTERVAL = 30  # min seconds between monitor_and_close calls
 
     def __init__(self, cfg, token_mgr, logger: logging.Logger):
         self.cfg = cfg
@@ -143,34 +146,54 @@ class PositionTracker:
         self.log = logger
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._last_monitor_ts: float = 0.0  # rate-limit monitor calls
 
     # ──────────────────────────────────────────────────────────
     # API: fetch raw positions
     # ──────────────────────────────────────────────────────────
 
     def _fetch_positions(self) -> List[Dict[str, Any]]:
-        """GET open positions from brokerage endpoint."""
+        """GET open positions from brokerage endpoint with retry on 429."""
         url = f"{self.cfg.base_url}/brokerage/accounts/{self.cfg.account_id}/positions"
-        token = self.token_mgr.get_access_token()
-        headers = {"Authorization": f"Bearer {token}"}
 
-        self.log.debug("Fetching positions from %s", url)
-        resp = requests.get(url, headers=headers, timeout=20)
-        if not resp.ok:
-            self.log.error(
-                "Positions request failed (HTTP %d): %s",
-                resp.status_code,
-                self._extract_resp_body(resp),
-            )
-            resp.raise_for_status()
+        for attempt in range(1, self._MAX_RETRIES + 1):
+            token = self.token_mgr.get_access_token()
+            headers = {"Authorization": f"Bearer {token}"}
 
-        body = resp.json()
-        # API may wrap in "Positions", "positions", or similar
-        for key in ("Positions", "positions", "Items", "items", "Data", "data"):
-            value = body.get(key)
-            if isinstance(value, list):
-                return value
-        return []
+            self.log.debug("Fetching positions from %s (attempt %d)", url, attempt)
+            resp = requests.get(url, headers=headers, timeout=20)
+
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                delay = float(retry_after) if retry_after else self._BASE_DELAY * (2 ** (attempt - 1))
+                self.log.warning(
+                    "429 Too Many Requests on positions (attempt %d/%d). "
+                    "Backing off %.1fs…",
+                    attempt, self._MAX_RETRIES, delay,
+                )
+                if attempt < self._MAX_RETRIES:
+                    time.sleep(delay)
+                    continue
+                # Final attempt still 429 — raise
+                resp.raise_for_status()
+
+            if not resp.ok:
+                self.log.error(
+                    "Positions request failed (HTTP %d): %s",
+                    resp.status_code,
+                    self._extract_resp_body(resp),
+                )
+                resp.raise_for_status()
+
+            body = resp.json()
+            # API may wrap in "Positions", "positions", or similar
+            for key in ("Positions", "positions", "Items", "items", "Data", "data"):
+                value = body.get(key)
+                if isinstance(value, list):
+                    return value
+            return []
+
+        return []  # unreachable, but keeps linters happy
 
     # ──────────────────────────────────────────────────────────
     # Parse positions into leg objects
@@ -392,7 +415,20 @@ class PositionTracker:
 
         When the threshold is met the spread is closed via
         ``trader.close_credit_spread()``.
+
+        Rate-limited to at most once every ``_MIN_MONITOR_INTERVAL`` seconds
+        to avoid 429 errors from the brokerage API.
         """
+        now = time.monotonic()
+        elapsed = now - self._last_monitor_ts
+        if elapsed < self._MIN_MONITOR_INTERVAL:
+            self.log.debug(
+                "Skipping monitor_and_close (%.0fs since last, need %ds).",
+                elapsed, self._MIN_MONITOR_INTERVAL,
+            )
+            return
+        self._last_monitor_ts = now
+
         try:
             spreads = self.get_open_spreads()
         except Exception as exc:
@@ -459,6 +495,9 @@ class PositionTracker:
                 self.log.error("Position tracker HTTP error: %s", exc)
                 if exc.response is not None and exc.response.status_code == 401:
                     self.log.info("Token may have expired — will retry next cycle.")
+                elif exc.response is not None and exc.response.status_code == 429:
+                    self.log.warning("Rate limited — extending sleep before next poll.")
+                    time.sleep(self.POLL_INTERVAL)  # extra cooldown
             except requests.exceptions.RequestException as exc:
                 self.log.error("Position tracker connection error: %s", exc)
             except Exception as exc:

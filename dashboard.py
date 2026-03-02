@@ -37,7 +37,7 @@ def _read_state() -> dict:
         return {
             "price": "—",
             "rsi": None,
-            "rsi_period": 9,
+            "rsi_period": 14,
             "timestamp": "",
             "updated_at": "Waiting for data…",
             "open": "—",
