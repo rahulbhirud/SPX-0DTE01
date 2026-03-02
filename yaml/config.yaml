@@ -64,6 +64,12 @@ rsi:
   ma_period: 9               # SMA period applied to RSI (RSI-based MA signal line)
   overbought: 70.0           # Log zone label when RSI ≥ this
   oversold: 30.0             # Log zone label when RSI ≤ this
+  
+  # ── Crossover Confirmation ────────────────────────────────
+  # Minimum distance (in points) RSI14 and MA9 must move apart
+  # since last crossover before the next crossover can trigger a trade.
+  # Prevents whipsaw trades from small oscillations.
+  min_crossover_distance: 8.0
 
 # ============================================================
 # Options Chain Scheduler

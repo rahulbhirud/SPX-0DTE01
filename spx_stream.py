@@ -145,6 +145,11 @@ class Config:
     def rsi_oversold(self) -> float:
         return float(self._raw.get("rsi", {}).get("oversold", 30.0))
 
+    @property
+    def rsi_min_crossover_distance(self) -> float:
+        """Minimum distance RSI14 and MA9 must move apart since last crossover."""
+        return float(self._raw.get("rsi", {}).get("min_crossover_distance", 8.0))
+
     # ── Options Chain Scheduler ───────────────────────────────
 
     @property
@@ -664,6 +669,9 @@ class SPXStreamer:
         # Track whether we already traded on the current crossover event.
         # Reset to False each time the state flips.
         self._rsi_cross_traded: bool = False
+        # Track RSI14 and MA9 values at the last crossover for distance confirmation
+        self._rsi_at_last_crossover: Optional[float] = None
+        self._ma_at_last_crossover: Optional[float] = None
 
         # Projected-open cache (refreshed each candle tick)
         self._projected_open: Optional[float] = None
@@ -745,7 +753,9 @@ class SPXStreamer:
         Guards:
         1. Only fires on the actual crossover (state transition), not on every tick.
         2. Only ONE trade per crossover event (``_rsi_cross_traded`` flag).
-        3. Checks ``PositionTracker`` — skips if a spread of the same type is
+        3. RSI and MA must move at least ``min_crossover_distance`` points apart since
+           the last crossover (hysteresis / confirmation to prevent whipsaws).
+        4. Checks ``PositionTracker`` — skips if a spread of the same type is
            already open.
         """
         rsi14 = self._rsi.current_rsi()
@@ -776,6 +786,9 @@ class SPXStreamer:
                 "RSI crossover baseline | RSI14=%.2f  MA9=%.2f  state=%s",
                 rsi14, ma9, new_state,
             )
+            # Record initial values
+            self._rsi_at_last_crossover = rsi14
+            self._ma_at_last_crossover = ma9
             return
 
         # No state change — no crossover
@@ -790,7 +803,30 @@ class SPXStreamer:
             )
             return
 
-        # ── Crossover detected ────────────────────────────────
+        # ── Distance confirmation ────────────────────────────────────
+        # Before firing the crossover, check that RSI and MA have moved
+        # at least min_crossover_distance apart since the last crossover.
+        # This prevents whipsaws and ensures conviction.
+        min_distance = self.cfg.rsi_min_crossover_distance
+        if self._rsi_at_last_crossover is not None and self._ma_at_last_crossover is not None:
+            # Distance between current RSI and MA
+            current_distance = abs(rsi14 - ma9)
+            
+            # Log for debugging
+            self.log.debug(
+                "Distance check | RSI14=%.2f MA9=%.2f distance=%.2f (need %.1f)",
+                rsi14, ma9, current_distance, min_distance,
+            )
+            
+            if current_distance < min_distance:
+                self.log.debug(
+                    "RSI crossover %s rejected — distance %.2f < required %.1f (at crossover: RSI=%.2f MA=%.2f)",
+                    new_state, current_distance, min_distance,
+                    self._rsi_at_last_crossover, self._ma_at_last_crossover,
+                )
+                return
+
+        # ── Crossover detected & distance confirmed ────────────────────
         if new_state == "above":
             # Check for existing put credit spread
             if self._has_open_spread("Put Credit"):
@@ -799,17 +835,24 @@ class SPXStreamer:
                     rsi14, ma9,
                 )
                 self._rsi_cross_traded = True
+                # Record this crossover for next distance check
+                self._rsi_at_last_crossover = rsi14
+                self._ma_at_last_crossover = ma9
                 return
 
             self.log.info(
-                "🟢 BULL crossover | RSI14=%.2f crossed above MA9=%.2f — opening put credit spread",
-                rsi14, ma9,
+                "🟢 BULL crossover | RSI14=%.2f crossed above MA9=%.2f (distance=%.2f) — opening put credit spread",
+                rsi14, ma9, abs(rsi14 - ma9),
             )
             try:
                 self._trader.open_put_credit_spread()
                 self._rsi_cross_traded = True
             except Exception as exc:
                 self.log.error("Failed to open put credit spread on bull crossover: %s", exc)
+            finally:
+                # Record this crossover for next distance check
+                self._rsi_at_last_crossover = rsi14
+                self._ma_at_last_crossover = ma9
         else:
             # Check for existing call credit spread
             if self._has_open_spread("Call Credit"):
@@ -818,17 +861,24 @@ class SPXStreamer:
                     rsi14, ma9,
                 )
                 self._rsi_cross_traded = True
+                # Record this crossover for next distance check
+                self._rsi_at_last_crossover = rsi14
+                self._ma_at_last_crossover = ma9
                 return
 
             self.log.info(
-                "🔴 BEAR crossover | RSI14=%.2f crossed below MA9=%.2f — opening call credit spread",
-                rsi14, ma9,
+                "🔴 BEAR crossover | RSI14=%.2f crossed below MA9=%.2f (distance=%.2f) — opening call credit spread",
+                rsi14, ma9, abs(rsi14 - ma9),
             )
             try:
                 self._trader.open_call_credit_spread()
                 self._rsi_cross_traded = True
             except Exception as exc:
                 self.log.error("Failed to open call credit spread on bear crossover: %s", exc)
+            finally:
+                # Record this crossover for next distance check
+                self._rsi_at_last_crossover = rsi14
+                self._ma_at_last_crossover = ma9
 
     # ──────────────────────────────────────────────────────────
     # Auto-open spread on exhaustion
