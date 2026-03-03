@@ -191,6 +191,22 @@ class Config:
     def options_profit_target_pct(self) -> float:
         return float(self._raw.get("options_scheduler", {}).get("profit_target_pct", 40))
 
+    # ── Auto Trading Guard Rails ─────────────────────────────────
+
+    @property
+    def auto_trading_enabled(self) -> bool:
+        return bool(self._raw.get("auto_trading", {}).get("enabled", True))
+
+    @property
+    def auto_trading_start_time(self) -> str:
+        """Earliest time (HH:MM, EST) for auto trades. Default 09:45."""
+        return self._raw.get("auto_trading", {}).get("start_time", "09:45")
+
+    @property
+    def auto_trading_end_time(self) -> str:
+        """Latest time (HH:MM, EST) for auto trades. Default 15:00."""
+        return self._raw.get("auto_trading", {}).get("end_time", "15:00")
+
 
 # ══════════════════════════════════════════════════════════════
 # Logging Setup
@@ -745,7 +761,30 @@ class SPXStreamer:
            the last crossover (hysteresis / confirmation to prevent whipsaws).
         4. Checks ``PositionTracker`` — skips if a spread of the same type is
            already open.
+        5. Auto-trading time window guard (``auto_trading.start_time`` / ``end_time``).
         """
+        # ── Time window guard ─────────────────────────────────────────
+        if not self.cfg.auto_trading_enabled:
+            return
+
+        import datetime as _dt
+        _est = _dt.timezone(_dt.timedelta(hours=-5))
+        now_est = _dt.datetime.now(tz=_est).time()
+
+        start_parts = self.cfg.auto_trading_start_time.split(":")
+        end_parts = self.cfg.auto_trading_end_time.split(":")
+        window_start = _dt.time(int(start_parts[0]), int(start_parts[1]))
+        window_end = _dt.time(int(end_parts[0]), int(end_parts[1]))
+
+        if now_est < window_start or now_est > window_end:
+            self.log.debug(
+                "Auto-trade outside allowed window (%s–%s EST, now %s) — skipping",
+                self.cfg.auto_trading_start_time,
+                self.cfg.auto_trading_end_time,
+                now_est.strftime("%H:%M"),
+            )
+            return
+
         rsi14 = self._rsi.current_rsi()
         ma9   = self._rsi.current_rsi_ma(self.cfg.rsi_ma_period if self.cfg else 9)
 

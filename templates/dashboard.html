@@ -254,6 +254,16 @@
             background: rgba(59, 130, 246, 0.2);
             color: var(--blue);
             border: 1px solid var(--blue);
+            position: relative;
+            min-width: 48px;
+        }
+
+        .btn-orders.has-orders {
+            background: rgba(239, 68, 68, 0.25);
+            color: var(--red);
+            border-color: var(--red);
+            font-weight: 800;
+            font-size: 16px;
         }
 
         .btn-crossover-log {
@@ -562,7 +572,8 @@
 </div>
 
 <!-- RSI Line Chart -->
-<div id="rsi-chart-wrap" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 8px 4px;margin-bottom:20px;">
+<div id="rsi-chart-wrap" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 8px 4px;margin-bottom:20px;position:relative;">
+    <span style="position:absolute;top:10px;left:16px;font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;z-index:5;">RSI</span>
     <div id="rsi-chart" style="width:100%;height:220px;"></div>
 </div>
 
@@ -888,13 +899,57 @@
             });
     }
 
-    /* ── RSI ApexChart ──────────────────────────── */
+    /* ── RSI ApexChart (full 9:30–16:00 time axis) ─── */
     let rsiChart = null;
-    let rsiSeries = [[], []];
-    let rsiLabels = [];
+    // xy-pair series: [{x: epoch_ms, y: value}, …]
+    let rsiSeriesData = [[], []];   // [RSI14 points, MA9 points]
     let lastChartTs = '';
 
+    /**
+     * Parse various timestamp formats into epoch-ms.
+     * Supported:
+     *   "2026-03-03 09:35:00 AM"         (12-hour, implicitly EST)
+     *   "2026-03-03 09:46:24 EST"         (24-hour with EST suffix)
+     *   "2026-03-03T14:50:00Z"            (ISO/UTC)
+     */
+    function tsToEpoch(tsStr) {
+        if (!tsStr) return null;
+        // 1) 12-hour format: "YYYY-MM-DD HH:MM:SS AM/PM"
+        const m12 = tsStr.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)/i);
+        if (m12) {
+            let h = parseInt(m12[4], 10);
+            const ampm = m12[7].toUpperCase();
+            if (ampm === 'PM' && h < 12) h += 12;
+            if (ampm === 'AM' && h === 12) h = 0;
+            return Date.UTC(parseInt(m12[1]), parseInt(m12[2]) - 1, parseInt(m12[3]),
+                            h + 5, parseInt(m12[5]), parseInt(m12[6]));
+        }
+        // 2) 24-hour EST: "YYYY-MM-DD HH:MM:SS EST"
+        const m24 = tsStr.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(?:EST|EDT)?$/i);
+        if (m24) {
+            return Date.UTC(parseInt(m24[1]), parseInt(m24[2]) - 1, parseInt(m24[3]),
+                            parseInt(m24[4]) + 5, parseInt(m24[5]), parseInt(m24[6]));
+        }
+        // 3) Fallback: ISO or anything JS can parse
+        const d = new Date(tsStr);
+        return isNaN(d) ? null : d.getTime();
+    }
+
+    /** Get today's 09:30 and 16:00 EST as epoch-ms (for chart bounds). */
+    function todayMarketBounds() {
+        const now = new Date();
+        // Current EST date
+        const estStr = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
+        const parts = estStr.split('-').map(Number);
+        // 09:30 EST = 14:30 UTC  (EST = UTC-5)
+        const open  = Date.UTC(parts[0], parts[1] - 1, parts[2], 14, 30, 0);
+        // 16:00 EST = 21:00 UTC
+        const close = Date.UTC(parts[0], parts[1] - 1, parts[2], 21, 0, 0);
+        return { open, close };
+    }
+
     function initRsiChart() {
+        const bounds = todayMarketBounds();
         const opts = {
             chart: {
                 type: 'line',
@@ -902,7 +957,7 @@
                 background: 'transparent',
                 toolbar: { show: false },
                 zoom: { enabled: false },
-                animations: { enabled: true, easing: 'linear', dynamicAnimation: { speed: 800 } }
+                animations: { enabled: true, easing: 'linear', dynamicAnimation: { speed: 600 } }
             },
             series: [
                 { name: 'RSI 14', data: [] },
@@ -911,30 +966,50 @@
             colors: ['#a855f7', '#f59e0b'],
             stroke: { width: [2.5, 2], curve: 'smooth' },
             xaxis: {
-                categories: [],
-                labels: { show: true, rotate: -45, rotateAlways: false, style: { colors: '#8b8fa3', fontSize: '10px' } },
+                type: 'datetime',
+                min: bounds.open,
+                max: bounds.close,
+                labels: {
+                    show: true,
+                    datetimeUTC: true,  /* our epoch values are already UTC-adjusted */
+                    format: 'HH:mm',
+                    style: { colors: '#8b8fa3', fontSize: '10px' },
+                    rotate: 0,
+                    rotateAlways: false
+                },
                 axisBorder: { show: false },
-                axisTicks: { show: false },
-                tickAmount: 10
+                axisTicks: { show: true, color: '#2a2d3a' },
+                tickAmount: 13  /* roughly every 30 min across 6.5 h */
             },
             yaxis: {
                 min: 0, max: 100,
                 tickAmount: 5,
-                labels: { style: { colors: '#8b8fa3', fontSize: '11px' }, formatter: v => v.toFixed(0) }
+                labels: {
+                    style: { colors: '#8b8fa3', fontSize: '11px' },
+                    formatter: v => v.toFixed(0)
+                }
             },
             annotations: {
                 yaxis: [
-                    { y: 70, borderColor: '#ef4444', strokeDashArray: 4, label: { text: '70', style: { color: '#ef4444', background: 'transparent', fontSize: '10px', padding: { left: 4, right: 4, top: 0, bottom: 0 } }, position: 'left' } },
-                    { y: 50, borderColor: '#3b82f6', strokeDashArray: 4, opacity: 0.3, label: { text: '50', style: { color: '#3b82f6', background: 'transparent', fontSize: '10px', padding: { left: 4, right: 4, top: 0, bottom: 0 } }, position: 'left' } },
-                    { y: 30, borderColor: '#22c55e', strokeDashArray: 4, label: { text: '30', style: { color: '#22c55e', background: 'transparent', fontSize: '10px', padding: { left: 4, right: 4, top: 0, bottom: 0 } }, position: 'left' } }
+                    { y: 70, borderColor: '#ef4444', strokeDashArray: 4,
+                      label: { text: '70', borderColor: 'transparent', style: { background: 'transparent', color: '#ef4444', fontSize: '10px' } } },
+                    { y: 50, borderColor: '#3b82f6', strokeDashArray: 4, opacity: 0.25 },
+                    { y: 30, borderColor: '#22c55e', strokeDashArray: 4,
+                      label: { text: '30', borderColor: 'transparent', style: { background: 'transparent', color: '#22c55e', fontSize: '10px' } } }
                 ]
             },
             grid: { borderColor: '#2a2d3a', strokeDashArray: 3, padding: { left: 8, right: 8 } },
-            legend: { show: true, position: 'top', horizontalAlign: 'left', labels: { colors: '#e1e4eb' }, fontSize: '12px', markers: { size: 6 } },
+            legend: {
+                show: true, position: 'top', horizontalAlign: 'left',
+                labels: { colors: '#e1e4eb' }, fontSize: '12px', markers: { size: 6 }
+            },
             tooltip: {
                 theme: 'dark',
-                x: { show: true },
-                y: { formatter: v => v !== null ? v.toFixed(2) : '—' }
+                x: {
+                    show: true,
+                    format: 'HH:mm'
+                },
+                y: { formatter: v => (v !== null && v !== undefined) ? v.toFixed(2) : '—' }
             }
         };
         rsiChart = new ApexCharts(document.getElementById('rsi-chart'), opts);
@@ -946,19 +1021,19 @@
             .then(r => r.json())
             .then(h => {
                 if (!h.timestamps || !h.timestamps.length) return;
-                // Parse short time labels from timestamps
-                rsiLabels = h.timestamps.map(ts => {
-                    const parts = ts.split(' ');
-                    return parts.length >= 2 ? parts[1] + (parts[2] ? ' ' + parts[2] : '') : ts;
-                });
-                rsiSeries = [h.rsi, h.rsi_ma];
+                const rsi14Points = [];
+                const ma9Points = [];
+                for (let i = 0; i < h.timestamps.length; i++) {
+                    const epoch = tsToEpoch(h.timestamps[i]);
+                    if (epoch === null) continue;
+                    rsi14Points.push({ x: epoch, y: h.rsi[i] });
+                    ma9Points.push({ x: epoch, y: h.rsi_ma[i] });
+                }
+                rsiSeriesData = [rsi14Points, ma9Points];
                 lastChartTs = h.timestamps[h.timestamps.length - 1];
-                rsiChart.updateOptions({
-                    xaxis: { categories: rsiLabels }
-                }, false, false);
                 rsiChart.updateSeries([
-                    { name: 'RSI 14', data: h.rsi },
-                    { name: 'MA 9',   data: h.rsi_ma }
+                    { name: 'RSI 14', data: rsi14Points },
+                    { name: 'MA 9',   data: ma9Points }
                 ]);
             })
             .catch(() => {});
@@ -966,31 +1041,22 @@
 
     function appendRsiPoint(data) {
         if (data.rsi_14 === null || data.rsi_14 === undefined) return;
-        // Use updated_at as timestamp
-        const ts = data.updated_at || '';
-        // Only plot during market hours 9:30 AM – 4:00 PM EST
-        const now = new Date();
-        // Convert to EST (UTC-5)
-        const estOff = -5 * 60;
-        const estMin = now.getUTCHours() * 60 + now.getUTCMinutes() + estOff;
-        if (estMin < 9 * 60 + 30 || estMin > 16 * 60) return;
-        if (ts === lastChartTs) return; // already plotted
+        // Prefer ISO timestamp (UTC), fall back to updated_at (EST text)
+        const ts = data.timestamp || data.updated_at || '';
+        if (!ts || ts === lastChartTs) return;
+        const epoch = tsToEpoch(ts);
+        // Only plot during market hours
+        const bounds = todayMarketBounds();
+        if (epoch === null || epoch < bounds.open || epoch > bounds.close) return;
         lastChartTs = ts;
-        const shortTs = ts.split(' ').slice(1).join(' ') || ts;
-        rsiLabels.push(shortTs);
-        rsiSeries[0].push(parseFloat(data.rsi_14.toFixed(2)));
-        rsiSeries[1].push(data.rsi_14_ma_9 !== null && data.rsi_14_ma_9 !== undefined
-            ? parseFloat(data.rsi_14_ma_9.toFixed(2)) : null);
-        // Keep max 60 points visible
-        if (rsiLabels.length > 60) {
-            rsiLabels.shift();
-            rsiSeries[0].shift();
-            rsiSeries[1].shift();
-        }
-        rsiChart.updateOptions({ xaxis: { categories: rsiLabels } }, false, false);
+        const rsiVal = parseFloat(data.rsi_14.toFixed(2));
+        const maVal = (data.rsi_14_ma_9 !== null && data.rsi_14_ma_9 !== undefined)
+            ? parseFloat(data.rsi_14_ma_9.toFixed(2)) : null;
+        rsiSeriesData[0].push({ x: epoch, y: rsiVal });
+        rsiSeriesData[1].push({ x: epoch, y: maVal });
         rsiChart.updateSeries([
-            { name: 'RSI 14', data: rsiSeries[0] },
-            { name: 'MA 9',   data: rsiSeries[1] }
+            { name: 'RSI 14', data: rsiSeriesData[0] },
+            { name: 'MA 9',   data: rsiSeriesData[1] }
         ]);
     }
 
@@ -1492,6 +1558,36 @@
             btn.disabled = false;
         });
     }
+
+    // ── Orders badge: poll for unfilled orders ─────────
+    const ORDERS_BADGE_POLL = 5000;
+
+    function updateOrdersBadge() {
+        fetch('/api/open_orders')
+            .then(r => r.json())
+            .then(body => {
+                const btn = document.getElementById('btn-view-orders');
+                if (!body.success) return;
+                const orders = Array.isArray(body.orders) ? body.orders : [];
+                const unfilled = orders.filter(o => {
+                    const st = (o.Status || o.status || o.OrderStatus || '').toUpperCase();
+                    return st !== 'FLL' && st !== 'FILLED';
+                });
+                if (unfilled.length > 0) {
+                    btn.textContent = unfilled.length;
+                    btn.classList.add('has-orders');
+                    btn.title = unfilled.length + ' open order' + (unfilled.length > 1 ? 's' : '');
+                } else {
+                    btn.textContent = '\u2630';
+                    btn.classList.remove('has-orders');
+                    btn.title = 'View Open Orders';
+                }
+            })
+            .catch(() => {});
+    }
+
+    updateOrdersBadge();
+    setInterval(updateOrdersBadge, ORDERS_BADGE_POLL);
 
     function cancelOrder(orderId, btn) {
         const messageEl = document.getElementById('orders-message');

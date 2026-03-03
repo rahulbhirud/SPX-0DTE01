@@ -38,7 +38,10 @@ class OrderTracker:
         "DONE",
         "OUT",
         "REJ",
-        "FLL"
+        "Partial",
+        "PARTIAL",
+        "FLL",
+        "FLP",
     }
 
     _MAX_RETRIES = 3
