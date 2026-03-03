@@ -33,7 +33,7 @@ streaming:
   bar_interval: 5            # 5-minute candles
   # ⚠ bars_back must be > rsi.period + 1 so RSI warms up on historical bars
   # Recommended: at least rsi.period * 3 (e.g. 42 for period=14)
-  bars_back: 50
+  bars_back: 150
   session_template: "Default"  # Default | USEQPre | USEQPost | USEQ24Hour
 
 # ----- Token Storage -----

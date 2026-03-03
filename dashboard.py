@@ -111,6 +111,50 @@ def api_state():
     return jsonify(_enrich_state(_read_state()))
 
 
+STREAM_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "stream_data")
+
+
+@app.route("/api/rsi_history")
+def api_rsi_history():
+    """Return today's RSI 14 and MA 9 time series from the daily candle file."""
+    import datetime as _dt
+    est = _dt.timezone(_dt.timedelta(hours=-5), "EST")
+    today = _dt.datetime.now(est).strftime("%Y-%m-%d")
+    filepath = os.path.join(STREAM_DATA_DIR, f"{today}.json")
+
+    try:
+        with open(filepath, "r") as f:
+            candles = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({"timestamps": [], "rsi": [], "rsi_ma": []})
+
+    # Market hours boundaries (EST)
+    market_open = _dt.time(9, 30)
+    market_close = _dt.time(16, 0)
+
+    timestamps = []
+    rsi_vals = []
+    ma_vals = []
+    for c in candles:
+        ts = c.get("TimeStamp", "")
+        rsi = c.get("RSI")
+        ma = c.get("RSI_MA")
+        if rsi is None:
+            continue
+        # Parse 12-hour timestamp: "2026-03-02 11:55:00 AM"
+        try:
+            dt = _dt.datetime.strptime(ts, "%Y-%m-%d %I:%M:%S %p")
+        except ValueError:
+            continue
+        if not (market_open <= dt.time() <= market_close):
+            continue
+        timestamps.append(ts)
+        rsi_vals.append(round(rsi, 2))
+        ma_vals.append(round(ma, 2) if ma is not None else None)
+
+    return jsonify({"timestamps": timestamps, "rsi": rsi_vals, "rsi_ma": ma_vals})
+
+
 # ── Trade execution endpoints ─────────────────────────────────
 
 def _get_trader():
