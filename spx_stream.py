@@ -650,6 +650,7 @@ class SPXStreamer:
 
     _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "dashboard_state.json")
     _STREAM_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json", "stream_data")
+    _CROSSOVER_FILE = os.path.join(_STREAM_DATA_DIR, "cross_over.json")
 
     def __init__(self, cfg: Config, token_mgr: TokenManager, logger: logging.Logger):
         self.cfg       = cfg
@@ -674,6 +675,9 @@ class SPXStreamer:
         # Projected-open cache (refreshed each candle tick)
         self._projected_open: Optional[float] = None
         self._spy_pct_change: Optional[float] = None
+
+        # Crossover log: tracks the date the file was last reset
+        self._crossover_log_date: Optional[str] = None
 
     # ──────────────────────────────────────────────────────────
     # Candle handler
@@ -808,6 +812,12 @@ class SPXStreamer:
                     new_state, current_distance, min_distance,
                     self._rsi_at_last_crossover, self._ma_at_last_crossover,
                 )
+                signal = "bull" if new_state == "above" else "bear"
+                self._log_crossover(
+                    signal=signal, rsi14=rsi14, ma9=ma9,
+                    distance=current_distance, trade_taken=False,
+                    reason=f"Distance {current_distance:.2f} < required {min_distance:.1f}",
+                )
                 return
 
         # ── Crossover detected & distance confirmed ────────────────────
@@ -819,24 +829,35 @@ class SPXStreamer:
                     rsi14, ma9,
                 )
                 self._rsi_cross_traded = True
-                # Record this crossover for next distance check
                 self._rsi_at_last_crossover = rsi14
                 self._ma_at_last_crossover = ma9
+                self._log_crossover(
+                    signal="bull", rsi14=rsi14, ma9=ma9,
+                    distance=abs(rsi14 - ma9), trade_taken=False,
+                    reason="Put Credit spread already open",
+                )
                 return
 
             self.log.info(
                 "🟢 BULL crossover | RSI14=%.2f crossed above MA9=%.2f (distance=%.2f) — opening put credit spread",
                 rsi14, ma9, abs(rsi14 - ma9),
             )
+            trade_ok = False
             try:
                 self._trader.open_put_credit_spread()
                 self._rsi_cross_traded = True
+                trade_ok = True
             except Exception as exc:
                 self.log.error("Failed to open put credit spread on bull crossover: %s", exc)
             finally:
-                # Record this crossover for next distance check
                 self._rsi_at_last_crossover = rsi14
                 self._ma_at_last_crossover = ma9
+                self._log_crossover(
+                    signal="bull", rsi14=rsi14, ma9=ma9,
+                    distance=abs(rsi14 - ma9), trade_taken=trade_ok,
+                    trade_detail="Put Credit Spread" if trade_ok else None,
+                    reason=None if trade_ok else "Trade execution failed",
+                )
         else:
             # Check for existing call credit spread
             if self._has_open_spread("Call Credit"):
@@ -845,24 +866,120 @@ class SPXStreamer:
                     rsi14, ma9,
                 )
                 self._rsi_cross_traded = True
-                # Record this crossover for next distance check
                 self._rsi_at_last_crossover = rsi14
                 self._ma_at_last_crossover = ma9
+                self._log_crossover(
+                    signal="bear", rsi14=rsi14, ma9=ma9,
+                    distance=abs(rsi14 - ma9), trade_taken=False,
+                    reason="Call Credit spread already open",
+                )
                 return
 
             self.log.info(
                 "🔴 BEAR crossover | RSI14=%.2f crossed below MA9=%.2f (distance=%.2f) — opening call credit spread",
                 rsi14, ma9, abs(rsi14 - ma9),
             )
+            trade_ok = False
             try:
                 self._trader.open_call_credit_spread()
                 self._rsi_cross_traded = True
+                trade_ok = True
             except Exception as exc:
                 self.log.error("Failed to open call credit spread on bear crossover: %s", exc)
             finally:
-                # Record this crossover for next distance check
                 self._rsi_at_last_crossover = rsi14
                 self._ma_at_last_crossover = ma9
+                self._log_crossover(
+                    signal="bear", rsi14=rsi14, ma9=ma9,
+                    distance=abs(rsi14 - ma9), trade_taken=trade_ok,
+                    trade_detail="Call Credit Spread" if trade_ok else None,
+                    reason=None if trade_ok else "Trade execution failed",
+                )
+
+    # ──────────────────────────────────────────────────────────
+    # Crossover log persistence
+    # ──────────────────────────────────────────────────────────
+
+    def _reset_crossover_log_if_new_day(self) -> None:
+        """Reset cross_over.json at 9:00 AM EST each trading day."""
+        import datetime as _dt
+        est = _dt.timezone(_dt.timedelta(hours=-5), "EST")
+        now = _dt.datetime.now(est)
+        today = now.strftime("%Y-%m-%d")
+        # Only reset once per day, and only after 9:00 AM EST
+        if self._crossover_log_date == today:
+            return
+        if now.time() < _dt.time(9, 0):
+            return
+        # New day — overwrite with empty array
+        os.makedirs(self._STREAM_DATA_DIR, exist_ok=True)
+        try:
+            tmp = self._CROSSOVER_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump([], f)
+            os.replace(tmp, self._CROSSOVER_FILE)
+            self.log.info("Crossover log reset for %s", today)
+        except Exception as exc:
+            self.log.warning("Failed to reset crossover log: %s", exc)
+        self._crossover_log_date = today
+
+    def _log_crossover(self, signal: str, rsi14: float, ma9: float,
+                       distance: float, trade_taken: bool,
+                       trade_detail: Optional[str] = None,
+                       reason: Optional[str] = None) -> None:
+        """Append a crossover event to cross_over.json.
+
+        Args:
+            signal:       "bull" or "bear"
+            rsi14:        RSI 14 value at the crossover
+            ma9:          MA 9 value at the crossover
+            distance:     abs(RSI14 - MA9) at the crossover
+            trade_taken:  whether a trade was executed
+            trade_detail: description of the trade (e.g. "Put Credit Spread")
+            reason:       why trade was skipped if not taken
+        """
+        import datetime as _dt
+        est = _dt.timezone(_dt.timedelta(hours=-5), "EST")
+        now = _dt.datetime.now(est)
+
+        # Only log during market hours (9:30 AM – 4:00 PM EST)
+        if not (_dt.time(9, 30) <= now.time() <= _dt.time(16, 0)):
+            return
+
+        now_est = now.strftime("%Y-%m-%d %I:%M:%S %p")
+
+        self._reset_crossover_log_if_new_day()
+
+        entry = {
+            "timestamp": now_est,
+            "signal": signal,
+            "rsi_14": round(rsi14, 2),
+            "ma_9": round(ma9, 2),
+            "crossover_distance": round(distance, 2),
+            "trade_taken": trade_taken,
+            "trade": trade_detail,
+            "reason": reason,
+        }
+
+        os.makedirs(self._STREAM_DATA_DIR, exist_ok=True)
+        try:
+            if os.path.exists(self._CROSSOVER_FILE):
+                with open(self._CROSSOVER_FILE, "r") as f:
+                    data = json.load(f)
+            else:
+                data = []
+        except (json.JSONDecodeError, IOError):
+            data = []
+
+        data.append(entry)
+
+        try:
+            tmp = self._CROSSOVER_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, self._CROSSOVER_FILE)
+        except Exception as exc:
+            self.log.warning("Failed to write crossover log: %s", exc)
 
     # ──────────────────────────────────────────────────────────
     # Market-hours helper

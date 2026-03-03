@@ -256,6 +256,15 @@
             border: 1px solid var(--blue);
         }
 
+        .btn-crossover-log {
+            background: rgba(168, 85, 247, 0.2);
+            color: var(--purple);
+            border: 1px solid var(--purple);
+            font-size: 16px;
+            min-width: 38px;
+            padding: 6px 10px;
+        }
+
         .trade-status {
             display: none;
             padding: 10px 16px;
@@ -637,6 +646,7 @@
     <button class="trade-btn btn-call" id="btn-open-call" onclick="openSpread('call')" title="Open Call Credit Spread">C</button>
     <button class="trade-btn btn-put" id="btn-open-put" onclick="openSpread('put')" title="Open Put Credit Spread">P</button>
     <button class="trade-btn btn-orders" id="btn-view-orders" onclick="openOrdersModal()" title="View Open Orders">☰</button>
+    <button class="trade-btn btn-crossover-log" id="btn-crossover-log" onclick="openCrossoverModal()" title="RSI Crossover Log">↔</button>
 </div>
 <div class="trade-status" id="trade-status"></div>
 
@@ -713,6 +723,33 @@
                 </tr>
                 </thead>
                 <tbody id="orders-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- ── Crossover Log Modal ────────────────────────────── -->
+<div class="modal-overlay" id="crossover-modal-overlay" onclick="crossoverOverlayClose(event)">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="crossover-modal-title" style="max-width:720px;">
+        <div class="modal-header">
+            <div class="modal-title" id="crossover-modal-title">RSI Crossover Log</div>
+            <button class="modal-close" onclick="closeCrossoverModal()">Close</button>
+        </div>
+        <div class="orders-body">
+            <div class="orders-message" id="crossover-message">Loading crossover log…</div>
+            <table class="orders-table" id="crossover-table" style="display:none;">
+                <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Signal</th>
+                    <th>RSI 14</th>
+                    <th>MA 9</th>
+                    <th>Distance</th>
+                    <th>Trade</th>
+                    <th>Detail / Reason</th>
+                </tr>
+                </thead>
+                <tbody id="crossover-tbody"></tbody>
             </table>
         </div>
     </div>
@@ -1011,6 +1048,60 @@
             btnCall.disabled = false;
             btnPut.disabled  = false;
         });
+    }
+
+    /* ── Crossover Log Modal ──────────────────────────── */
+    function openCrossoverModal() {
+        document.getElementById('crossover-modal-overlay').style.display = 'flex';
+        loadCrossoverLog();
+    }
+    function closeCrossoverModal() {
+        document.getElementById('crossover-modal-overlay').style.display = 'none';
+    }
+    function crossoverOverlayClose(event) {
+        if (event.target && event.target.id === 'crossover-modal-overlay') closeCrossoverModal();
+    }
+    function loadCrossoverLog() {
+        const msg = document.getElementById('crossover-message');
+        const tbl = document.getElementById('crossover-table');
+        const tbody = document.getElementById('crossover-tbody');
+        msg.textContent = 'Loading crossover log…';
+        msg.style.display = 'block';
+        tbl.style.display = 'none';
+
+        fetch('/api/crossover_log')
+            .then(r => r.json())
+            .then(data => {
+                if (!data || data.length === 0) {
+                    msg.textContent = 'No crossover events today.';
+                    return;
+                }
+                msg.style.display = 'none';
+                tbl.style.display = 'table';
+                tbody.innerHTML = '';
+                data.forEach(e => {
+                    const tr = document.createElement('tr');
+                    const sigColor = e.signal === 'bull' ? 'var(--green)' : 'var(--red)';
+                    const sigIcon = e.signal === 'bull' ? '🟢' : '🔴';
+                    const tradeCell = e.trade_taken
+                        ? '<span style="color:var(--green)">Yes</span>'
+                        : '<span style="color:var(--muted)">No</span>';
+                    const detail = e.trade_taken ? (e.trade || '—') : (e.reason || '—');
+                    tr.innerHTML = `
+                        <td style="white-space:nowrap;">${e.timestamp || '—'}</td>
+                        <td style="color:${sigColor};font-weight:700;">${sigIcon} ${(e.signal || '').toUpperCase()}</td>
+                        <td>${e.rsi_14 != null ? e.rsi_14.toFixed(2) : '—'}</td>
+                        <td>${e.ma_9 != null ? e.ma_9.toFixed(2) : '—'}</td>
+                        <td>${e.crossover_distance != null ? e.crossover_distance.toFixed(2) : '—'}</td>
+                        <td>${tradeCell}</td>
+                        <td style="font-size:11px;color:var(--muted);">${detail}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            })
+            .catch(() => {
+                msg.textContent = 'Failed to load crossover log.';
+            });
     }
 
     function openOrdersModal() {

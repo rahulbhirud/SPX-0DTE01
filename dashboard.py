@@ -155,6 +155,18 @@ def api_rsi_history():
     return jsonify({"timestamps": timestamps, "rsi": rsi_vals, "rsi_ma": ma_vals})
 
 
+@app.route("/api/crossover_log")
+def api_crossover_log():
+    """Return today's RSI crossover log from cross_over.json."""
+    filepath = os.path.join(STREAM_DATA_DIR, "cross_over.json")
+    try:
+        with open(filepath, "r") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = []
+    return jsonify(data)
+
+
 # ── Trade execution endpoints ─────────────────────────────────
 
 def _get_trader():
