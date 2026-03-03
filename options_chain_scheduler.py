@@ -320,13 +320,23 @@ class OptionsChainScheduler:
                     if len(calls) > max_per_side and len(puts) > max_per_side:
                         self.log.warning("Aborting options chain fetch: too many strikes received (calls=%d, puts=%d, cap=%d)", len(calls), len(puts), max_per_side)
                         break
-                    # if current_count > max_count:
-                    #     max_count = current_count
-                    #     stagnant_updates = 0
-                    # else:
-                    #     stagnant_updates += 1
-                    #     if stagnant_updates >= max_stagnant_updates:
-                    #         break
+
+                    # Snapshot-complete detection: once the count of unique
+                    # strikes stops growing for `max_stagnant_updates`
+                    # consecutive messages, the initial snapshot is done.
+                    if current_count > max_count:
+                        max_count = current_count
+                        stagnant_updates = 0
+                    else:
+                        stagnant_updates += 1
+                        if stagnant_updates >= max_stagnant_updates:
+                            self.log.debug(
+                                "Snapshot complete — %d strikes (%d calls, %d puts) "
+                                "after %d stagnant updates.",
+                                current_count, len(calls), len(puts),
+                                max_stagnant_updates,
+                            )
+                            break
 
         except requests.exceptions.HTTPError as exc:
             self.log.error("Options chain HTTP error: %s (url=%s)", exc, url)
