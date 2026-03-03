@@ -702,6 +702,7 @@
                 <th>Credit</th>
                 <th>Cost to Close</th>
                 <th>Open P&amp;L</th>
+                <th>% P/L</th>
                 <th>Short &#916;</th>
                 <th></th>
             </tr>
@@ -1471,6 +1472,8 @@
 
                 spreads.forEach((s, i) => {
                     totalPnl += s.open_pnl;
+                    const totalCredit = s.credit_received * s.contracts * 100;
+                    const pctPnl = totalCredit !== 0 ? (s.open_pnl / totalCredit) * 100 : 0;
                     const row = document.createElement('tr');
                     row.innerHTML = `
                         <td>${i + 1}</td>
@@ -1480,6 +1483,7 @@
                         <td>$${s.credit_received.toFixed(2)}</td>
                         <td>$${s.current_cost.toFixed(2)}</td>
                         <td class="${pnlClass(s.open_pnl)}">$${s.open_pnl.toFixed(2)}</td>
+                        <td class="${pnlClass(pctPnl)}">${pctPnl.toFixed(1)}%</td>
                         <td>${s.short_delta.toFixed(4)}</td>
                         <td><button class="close-pos-btn" title="Close position at $${s.current_cost.toFixed(2)}"
                             data-short="${s.short_symbol}" data-long="${s.long_symbol}"
@@ -1496,6 +1500,7 @@
                 totalRow.innerHTML = `
                     <td colspan="6" style="text-align:right;">Total P&amp;L</td>
                     <td class="${pnlClass(totalPnl)}">$${totalPnl.toFixed(2)}</td>
+                    <td></td>
                     <td></td>
                     <td></td>
                 `;
