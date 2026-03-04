@@ -22,15 +22,14 @@ import argparse
 import json
 import logging
 import os
+import time
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
 
-from datetime import date
-
-
-# ══════════════════════════════════════════════════════════════
+from order_tracker import OrderTracker# ══════════════════════════════════════════════════════════════
 # Helper
 # ══════════════════════════════════════════════════════════════
 
@@ -68,6 +67,7 @@ class OptionsTrader:
         self.cfg = cfg
         self.token_mgr = token_mgr
         self.log = logger
+        self._order_tracker = OrderTracker(cfg, token_mgr, logger)
 
     def _get_leg_market(self, symbol: str) -> dict:
         """Fetch latest bid/ask for a given option symbol using PositionTracker."""
@@ -91,6 +91,218 @@ class OptionsTrader:
     DATA_FILE = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "json", "options_data_config.json"
     )
+
+    # Maximum age (seconds) of options_data_config.json before it's considered stale
+    MAX_DATA_AGE_SECS = 10
+    # How long (seconds) to wait between freshness retries
+    FRESHNESS_RETRY_DELAY = 2
+    # Maximum number of freshness retries
+    FRESHNESS_MAX_RETRIES = 5
+
+    def _get_data_age(self) -> Optional[float]:
+        """Return the age in seconds of options_data_config.json, or None if unreadable."""
+        try:
+            with open(self.DATA_FILE, "r") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+        ts_str = data.get("timestamp", "")
+        if not ts_str:
+            return None
+
+        # Parse timestamp: "2026-03-03 10:35:12 EST"
+        try:
+            # Strip timezone name and parse
+            ts_clean = ts_str.rsplit(" ", 1)[0] if ts_str.endswith(("EST", "EDT")) else ts_str
+            dt = datetime.strptime(ts_clean, "%Y-%m-%d %H:%M:%S")
+            # Assume EST (UTC-5)
+            est = timezone(timedelta(hours=-5))
+            dt = dt.replace(tzinfo=est)
+        except ValueError:
+            try:
+                dt = datetime.fromisoformat(ts_str)
+            except ValueError:
+                return None
+
+        now = datetime.now(timezone(timedelta(hours=-5)))
+        return (now - dt).total_seconds()
+
+    def _wait_for_fresh_data(self) -> bool:
+        """Wait until options_data_config.json has fresh data (< MAX_DATA_AGE_SECS old).
+
+        Returns True if fresh data is available, False if timed out.
+        """
+        for attempt in range(1, self.FRESHNESS_MAX_RETRIES + 1):
+            age = self._get_data_age()
+            if age is not None and age <= self.MAX_DATA_AGE_SECS:
+                self.log.info(
+                    "Options data is fresh (%.1fs old) — proceeding with order",
+                    age,
+                )
+                return True
+            age_str = f"{age:.1f}s" if age is not None else "unknown"
+            self.log.info(
+                "Options data is stale (%s old, max %ds) — waiting %ds (attempt %d/%d)",
+                age_str, self.MAX_DATA_AGE_SECS,
+                self.FRESHNESS_RETRY_DELAY, attempt, self.FRESHNESS_MAX_RETRIES,
+            )
+            time.sleep(self.FRESHNESS_RETRY_DELAY)
+
+        age = self._get_data_age()
+        if age is not None and age <= self.MAX_DATA_AGE_SECS:
+            self.log.info("Options data became fresh (%.1fs old) after waiting", age)
+            return True
+
+        self.log.warning(
+            "Options data still stale after %d retries — proceeding anyway",
+            self.FRESHNESS_MAX_RETRIES,
+        )
+        return False
+
+    # ──────────────────────────────────────────────────────────
+    # Order fill detection & cancel-retry
+    # ──────────────────────────────────────────────────────────
+
+    FILL_WAIT_SECS = 3  # seconds to wait for a fill before cancelling
+
+    @staticmethod
+    def _extract_order_id(resp_body: Dict[str, Any]) -> Optional[str]:
+        """Extract the order ID from a TradeStation order-placement response."""
+        src = resp_body
+        orders = resp_body.get("Orders")
+        if isinstance(orders, list) and orders and isinstance(orders[0], dict):
+            src = orders[0]
+        return (
+            src.get("OrderID") or src.get("orderID")
+            or src.get("OrderId") or src.get("orderId")
+        )
+
+    def _is_order_filled(self, order_id: str) -> bool:
+        """Check if a specific order has been filled."""
+        try:
+            open_orders = self._order_tracker.get_open_orders()
+            # If the order is no longer in open orders, it's either filled or cancelled.
+            # We assume filled since we just placed it and haven't cancelled yet.
+            for o in open_orders:
+                oid = (
+                    o.get("OrderID") or o.get("orderID")
+                    or o.get("OrderId") or o.get("orderId") or ""
+                )
+                if str(oid) == str(order_id):
+                    return False  # still open → not filled
+            return True  # not found in open orders → filled
+        except Exception as exc:
+            self.log.warning("Failed to check order %s fill status: %s", order_id, exc)
+            return False  # assume not filled on error
+
+    def _cancel_order(self, order_id: str) -> bool:
+        """Cancel an order by ID. Returns True on success."""
+        try:
+            self._order_tracker.cancel_order(order_id)
+            self.log.info("Cancelled unfilled order %s", order_id)
+            return True
+        except Exception as exc:
+            self.log.error("Failed to cancel order %s: %s", order_id, exc)
+            return False
+
+    def _submit_with_fill_retry(
+        self, spread_key: str, label: str, quantity: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Submit an order with cancel-and-retry if not filled within FILL_WAIT_SECS.
+
+        On each attempt:
+          1. Wait for fresh spread data
+          2. Load and pick the best spread
+          3. Submit the order
+          4. Wait FILL_WAIT_SECS, then check if filled
+          5. If not filled → cancel, loop back to step 1
+
+        Returns the API response on a successful fill, or None.
+        """
+        max_retries = getattr(self.cfg, "options_max_order_retries", 5)
+
+        for attempt in range(1, max_retries + 1):
+            self.log.info(
+                "%s order attempt %d/%d", label, attempt, max_retries,
+            )
+
+            # Step 1 — ensure fresh data
+            self._wait_for_fresh_data()
+
+            # Step 2 — load and pick best spread
+            spreads = self._load_spreads(spread_key)
+            if not spreads:
+                self.log.warning(
+                    "No %s spreads found in %s (attempt %d)",
+                    spread_key, self.DATA_FILE, attempt,
+                )
+                return None
+
+            selected = self._pick_max_premium(spreads)
+            if selected is None:
+                self.log.error(
+                    "No valid %s spread (need symbols + positive premium) in %s (attempt %d)",
+                    spread_key, self.DATA_FILE, attempt,
+                )
+                return None
+
+            self.log.info(
+                "Selected %s | short_strike=%.1f  long_strike=%.1f  "
+                "width=%s  net_credit=%.2f  (attempt %d)",
+                label, selected["short_strike"], selected["long_strike"],
+                selected["width"], _safe_float(selected.get("net_credit")),
+                attempt,
+            )
+
+            # Step 3 — submit the order
+            try:
+                resp_json = self._submit_open_order(selected, quantity)
+            except requests.exceptions.HTTPError as exc:
+                body = self._extract_resp_body(getattr(exc, "response", None))
+                self.log.error("%s order HTTP error (attempt %d): %s | body=%s", label, attempt, exc, body)
+                return None  # hard rejection — don't retry
+            except requests.RequestException as exc:
+                self.log.error("%s order request failed (attempt %d): %s", label, attempt, exc)
+                return None
+            except Exception as exc:
+                self.log.exception("%s order unexpected error (attempt %d): %s", label, attempt, exc)
+                return None
+
+            self._log_order_status(label, resp_json)
+
+            order_id = self._extract_order_id(resp_json)
+            if not order_id:
+                self.log.warning("%s order response has no order ID — cannot track fill", label)
+                return resp_json  # can't track, return what we have
+
+            # Step 4 — wait and check fill
+            self.log.info(
+                "Waiting %ds for order %s to fill…", self.FILL_WAIT_SECS, order_id,
+            )
+            time.sleep(self.FILL_WAIT_SECS)
+
+            if self._is_order_filled(order_id):
+                self.log.info(
+                    "✅ %s order %s FILLED on attempt %d", label, order_id, attempt,
+                )
+                return resp_json
+
+            # Step 5 — not filled → cancel and retry
+            self.log.info(
+                "%s order %s not filled after %ds — cancelling (attempt %d/%d)",
+                label, order_id, self.FILL_WAIT_SECS, attempt, max_retries,
+            )
+            self._cancel_order(order_id)
+
+            if attempt < max_retries:
+                # Brief pause for cancel to process before next attempt
+                time.sleep(0.5)
+
+        self.log.warning(
+            "%s order not filled after %d attempts — giving up", label, max_retries,
+        )
+        return None
 
     def _load_spreads(self, spread_key: str) -> List[Dict[str, Any]]:
         """Load a list of spread candidates from the JSON data file.
@@ -319,43 +531,17 @@ class OptionsTrader:
         """Select the call credit spread with the highest premium from
         ``options_data_config.json`` and submit an opening order.
 
+        Uses cancel-and-retry if the order is not filled within a few seconds.
         Returns the API response dict on success, or ``None`` on failure.
         """
         if quantity is None:
             quantity = self.cfg.options_default_quantity
 
-        spreads = self._load_spreads("credit_call_spreads")
-        if not spreads:
-            self.log.warning("No call credit spreads found in %s", self.DATA_FILE)
-            return None
-
-        selected = self._pick_max_premium(spreads)
-        if selected is None:
-            self.log.error(
-                "No valid call credit spread (need symbols + positive premium) in %s",
-                self.DATA_FILE,
-            )
-            return None
-
-        self.log.info(
-            "Selected call credit spread | short_strike=%.1f  long_strike=%.1f  "
-            "width=%s  net_credit=%.2f",
-            selected["short_strike"], selected["long_strike"],
-            selected["width"], _safe_float(selected.get("net_credit")),
+        return self._submit_with_fill_retry(
+            spread_key="credit_call_spreads",
+            label="CALL CREDIT",
+            quantity=quantity,
         )
-
-        try:
-            resp_json = self._submit_open_order(selected, quantity)
-            self._log_order_status("CALL CREDIT", resp_json)
-            return resp_json
-        except requests.exceptions.HTTPError as exc:
-            body = self._extract_resp_body(getattr(exc, "response", None))
-            self.log.error("Call credit order HTTP error: %s | body=%s", exc, body)
-        except requests.RequestException as exc:
-            self.log.error("Call credit order request failed: %s", exc)
-        except Exception as exc:
-            self.log.exception("Call credit order unexpected error: %s", exc)
-        return None
 
 
     def close_credit_spread(
@@ -471,43 +657,17 @@ class OptionsTrader:
         """Select the put credit spread with the highest premium from
         ``options_data_config.json`` and submit an opening order.
 
+        Uses cancel-and-retry if the order is not filled within a few seconds.
         Returns the API response dict on success, or ``None`` on failure.
         """
         if quantity is None:
             quantity = self.cfg.options_default_quantity
 
-        spreads = self._load_spreads("credit_put_spreads")
-        if not spreads:
-            self.log.warning("No put credit spreads found in %s", self.DATA_FILE)
-            return None
-
-        selected = self._pick_max_premium(spreads)
-        if selected is None:
-            self.log.error(
-                "No valid put credit spread (need symbols + positive premium) in %s",
-                self.DATA_FILE,
-            )
-            return None
-
-        self.log.info(
-            "Selected put credit spread | short_strike=%.1f  long_strike=%.1f  "
-            "width=%s  net_credit=%.2f",
-            selected["short_strike"], selected["long_strike"],
-            selected["width"], _safe_float(selected.get("net_credit")),
+        return self._submit_with_fill_retry(
+            spread_key="credit_put_spreads",
+            label="PUT CREDIT",
+            quantity=quantity,
         )
-
-        try:
-            resp_json = self._submit_open_order(selected, quantity)
-            self._log_order_status("PUT CREDIT", resp_json)
-            return resp_json
-        except requests.exceptions.HTTPError as exc:
-            body = self._extract_resp_body(getattr(exc, "response", None))
-            self.log.error("Put credit order HTTP error: %s | body=%s", exc, body)
-        except requests.RequestException as exc:
-            self.log.error("Put credit order request failed: %s", exc)
-        except Exception as exc:
-            self.log.exception("Put credit order unexpected error: %s", exc)
-        return None
 
 
 # ══════════════════════════════════════════════════════════════

@@ -756,6 +756,7 @@
                     <th>RSI 14</th>
                     <th>MA 9</th>
                     <th>Distance</th>
+                    <th>Highest Dist</th>
                     <th>Trade</th>
                     <th>Detail / Reason</th>
                 </tr>
@@ -1147,8 +1148,10 @@
                 tbody.innerHTML = '';
                 data.forEach(e => {
                     const tr = document.createElement('tr');
-                    const sigColor = e.signal === 'bull' ? 'var(--green)' : 'var(--red)';
-                    const sigIcon = e.signal === 'bull' ? '🟢' : '🔴';
+                    let sigColor, sigIcon;
+                    if (e.signal === 'bull') { sigColor = 'var(--green)'; sigIcon = '🟢'; }
+                    else if (e.signal === 'bear') { sigColor = 'var(--red)'; sigIcon = '🔴'; }
+                    else { sigColor = 'var(--accent)'; sigIcon = '📍'; }
                     const tradeCell = e.trade_taken
                         ? '<span style="color:var(--green)">Yes</span>'
                         : '<span style="color:var(--muted)">No</span>';
@@ -1159,6 +1162,7 @@
                         <td>${e.rsi_14 != null ? e.rsi_14.toFixed(2) : '—'}</td>
                         <td>${e.ma_9 != null ? e.ma_9.toFixed(2) : '—'}</td>
                         <td>${e.crossover_distance != null ? e.crossover_distance.toFixed(2) : '—'}</td>
+                        <td>${e.highest_distance != null ? e.highest_distance.toFixed(2) : '—'}</td>
                         <td>${tradeCell}</td>
                         <td style="font-size:11px;color:var(--muted);">${detail}</td>
                     `;

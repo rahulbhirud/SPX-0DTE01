@@ -24,6 +24,8 @@ def cfg():
     c = MagicMock()
     c.account_id = "SIM123"
     c.base_url = "https://sim-api.tradestation.com/v3"
+    c.options_default_quantity = 1
+    c.options_max_order_retries = 1
     return c
 
 
@@ -232,8 +234,11 @@ class TestOpenPutCreditSpreadBackfill:
         ],
     }
 
+    @patch("options_trader.time.sleep")
+    @patch.object(OptionsTrader, "_is_order_filled", return_value=True)
+    @patch.object(OptionsTrader, "_wait_for_fresh_data", return_value=True)
     @patch("options_trader.requests.post")
-    def test_order_submitted_with_built_symbols(self, mock_post, cfg, token_mgr, logger):
+    def test_order_submitted_with_built_symbols(self, mock_post, _fresh, _filled, _sleep, cfg, token_mgr, logger):
         # First call = orderconfirm, Second call = orders
         confirm_resp = MagicMock()
         confirm_resp.ok = True
@@ -358,8 +363,10 @@ class TestExtractRespBody:
 
 class TestConfirmOrderRejectsOnFailure:
 
+    @patch("options_trader.time.sleep")
+    @patch.object(OptionsTrader, "_wait_for_fresh_data", return_value=True)
     @patch("options_trader.requests.post")
-    def test_confirm_failure_prevents_order(self, mock_post, cfg, token_mgr, logger):
+    def test_confirm_failure_prevents_order(self, mock_post, _fresh, _sleep, cfg, token_mgr, logger):
         """If orderconfirm returns 400, the order should NOT be placed."""
         import requests as _req
 

@@ -191,6 +191,10 @@ class Config:
     def options_profit_target_pct(self) -> float:
         return float(self._raw.get("options_scheduler", {}).get("profit_target_pct", 40))
 
+    @property
+    def options_max_order_retries(self) -> int:
+        return int(self._raw.get("options_scheduler", {}).get("max_order_retries", 5))
+
     # ── Auto Trading Guard Rails ─────────────────────────────────
 
     @property
@@ -681,12 +685,10 @@ class SPXStreamer:
 
         # RSI crossover state: None = unknown, "above" = RSI14 > MA9, "below" = RSI14 < MA9
         self._rsi_cross_state: Optional[str] = None
-        # Track whether we already traded on the current crossover event.
-        # Reset to False each time the state flips.
-        self._rsi_cross_traded: bool = False
-        # Track RSI14 and MA9 values at the last crossover for distance confirmation
-        self._rsi_at_last_crossover: Optional[float] = None
-        self._ma_at_last_crossover: Optional[float] = None
+        # Highest abs(RSI14 - MA9) seen since market open or last crossover
+        self._highest_distance: float = 0.0
+        # Whether the market-open baseline has been logged to cross_over.json today
+        self._market_open_logged: bool = False
 
         # Projected-open cache (refreshed each candle tick)
         self._projected_open: Optional[float] = None
@@ -754,36 +756,16 @@ class SPXStreamer:
         * RSI 14 crosses **above** MA 9  → BULL signal → open **put** credit spread
         * RSI 14 crosses **below** MA 9  → BEAR signal → open **call** credit spread
 
-        Guards:
-        1. Only fires on the actual crossover (state transition), not on every tick.
-        2. Only ONE trade per crossover event (``_rsi_cross_traded`` flag).
-        3. RSI and MA must move at least ``min_crossover_distance`` points apart since
-           the last crossover (hysteresis / confirmation to prevent whipsaws).
-        4. Checks ``PositionTracker`` — skips if a spread of the same type is
-           already open.
+        Logic:
+        1. On every tick update ``_highest_distance`` (max distance since open / last crossover).
+        2. At market open log a baseline entry to cross_over.json (once per day).
+        3. On crossover: if ``_highest_distance`` ≥ ``min_crossover_distance`` → trade;
+           otherwise log only.  Reset ``_highest_distance`` after every crossover.
+        4. Checks ``PositionTracker`` — skips trade if a spread of the same type
+           is already open.
         5. Auto-trading time window guard (``auto_trading.start_time`` / ``end_time``).
         """
-        # ── Time window guard ─────────────────────────────────────────
-        if not self.cfg.auto_trading_enabled:
-            return
-
         import datetime as _dt
-        _est = _dt.timezone(_dt.timedelta(hours=-5))
-        now_est = _dt.datetime.now(tz=_est).time()
-
-        start_parts = self.cfg.auto_trading_start_time.split(":")
-        end_parts = self.cfg.auto_trading_end_time.split(":")
-        window_start = _dt.time(int(start_parts[0]), int(start_parts[1]))
-        window_end = _dt.time(int(end_parts[0]), int(end_parts[1]))
-
-        if now_est < window_start or now_est > window_end:
-            self.log.debug(
-                "Auto-trade outside allowed window (%s–%s EST, now %s) — skipping",
-                self.cfg.auto_trading_start_time,
-                self.cfg.auto_trading_end_time,
-                now_est.strftime("%H:%M"),
-            )
-            return
 
         rsi14 = self._rsi.current_rsi()
         ma9   = self._rsi.current_rsi_ma(self.cfg.rsi_ma_period if self.cfg else 9)
@@ -791,7 +773,54 @@ class SPXStreamer:
         if rsi14 is None or ma9 is None:
             return
 
-        # Determine current relationship
+        current_distance = abs(rsi14 - ma9)
+
+        # ── Market-open baseline (logged once per day) ─────────────────
+        _est = _dt.timezone(_dt.timedelta(hours=-5))
+        now_est = _dt.datetime.now(tz=_est)
+
+        if not self._market_open_logged and _dt.time(9, 30) <= now_est.time() <= _dt.time(16, 0):
+            self._market_open_logged = True
+            self._highest_distance = current_distance
+            if rsi14 > ma9:
+                self._rsi_cross_state = "above"
+            elif rsi14 < ma9:
+                self._rsi_cross_state = "below"
+            self.log.info(
+                "RSI market-open baseline | RSI14=%.2f  MA9=%.2f  distance=%.2f  state=%s",
+                rsi14, ma9, current_distance, self._rsi_cross_state,
+            )
+            self._log_crossover(
+                signal="open", rsi14=rsi14, ma9=ma9,
+                distance=current_distance, highest_distance=current_distance,
+                trade_taken=False, reason="Market open baseline",
+            )
+            return
+
+        # ── Update highest distance since open / last crossover ────────
+        if current_distance > self._highest_distance:
+            self._highest_distance = current_distance
+
+        # ── Time window guard (auto-trading) ───────────────────────────
+        if not self.cfg.auto_trading_enabled:
+            return
+
+        now_time = now_est.time()
+        start_parts = self.cfg.auto_trading_start_time.split(":")
+        end_parts = self.cfg.auto_trading_end_time.split(":")
+        window_start = _dt.time(int(start_parts[0]), int(start_parts[1]))
+        window_end = _dt.time(int(end_parts[0]), int(end_parts[1]))
+
+        if now_time < window_start or now_time > window_end:
+            self.log.debug(
+                "Auto-trade outside allowed window (%s–%s EST, now %s) — skipping",
+                self.cfg.auto_trading_start_time,
+                self.cfg.auto_trading_end_time,
+                now_time.strftime("%H:%M"),
+            )
+            return
+
+        # ── Determine current RSI vs MA relationship ───────────────────
         if rsi14 > ma9:
             new_state = "above"
         elif rsi14 < ma9:
@@ -800,11 +829,6 @@ class SPXStreamer:
             return  # exactly equal — no signal
 
         prev_state = self._rsi_cross_state
-
-        # State changed → reset the traded flag so the new crossover can fire
-        if new_state != prev_state:
-            self._rsi_cross_traded = False
-
         self._rsi_cross_state = new_state
 
         # First reading — establish baseline, don't trade
@@ -813,127 +837,75 @@ class SPXStreamer:
                 "RSI crossover baseline | RSI14=%.2f  MA9=%.2f  state=%s",
                 rsi14, ma9, new_state,
             )
-            # Record initial values
-            self._rsi_at_last_crossover = rsi14
-            self._ma_at_last_crossover = ma9
             return
 
         # No state change — no crossover
         if new_state == prev_state:
             return
 
-        # Already traded on this crossover event — don't open another
-        if self._rsi_cross_traded:
-            self.log.debug(
-                "RSI crossover %s already traded — skipping",
-                new_state,
+        # ═══════════ CROSSOVER DETECTED ═══════════
+        signal = "bull" if new_state == "above" else "bear"
+        min_distance = self.cfg.rsi_min_crossover_distance
+        highest = self._highest_distance
+
+        self.log.info(
+            "%s %s crossover | RSI14=%.2f  MA9=%.2f  highest_distance=%.2f  (threshold=%.1f)",
+            "🟢" if signal == "bull" else "🔴",
+            signal.upper(), rsi14, ma9, highest, min_distance,
+        )
+
+        # ── Highest distance < threshold → log only, no trade ─────────
+        if highest < min_distance:
+            self.log.info(
+                "Crossover %s skipped — highest distance %.2f < required %.1f",
+                signal, highest, min_distance,
             )
+            self._log_crossover(
+                signal=signal, rsi14=rsi14, ma9=ma9,
+                distance=current_distance, highest_distance=highest,
+                trade_taken=False,
+                reason=f"Highest distance {highest:.2f} < required {min_distance:.1f}",
+            )
+            # Reset highest distance for next segment
+            self._highest_distance = current_distance
             return
 
-        # ── Distance confirmation ────────────────────────────────────
-        # Before firing the crossover, check that RSI and MA have moved
-        # at least min_crossover_distance apart since the last crossover.
-        # This prevents whipsaws and ensures conviction.
-        min_distance = self.cfg.rsi_min_crossover_distance
-        if self._rsi_at_last_crossover is not None and self._ma_at_last_crossover is not None:
-            # Distance between current RSI and MA
-            current_distance = abs(rsi14 - ma9)
-            
-            # Log for debugging
-            self.log.debug(
-                "Distance check | RSI14=%.2f MA9=%.2f distance=%.2f (need %.1f)",
-                rsi14, ma9, current_distance, min_distance,
-            )
-            
-            if current_distance < min_distance:
-                self.log.debug(
-                    "RSI crossover %s rejected — distance %.2f < required %.1f (at crossover: RSI=%.2f MA=%.2f)",
-                    new_state, current_distance, min_distance,
-                    self._rsi_at_last_crossover, self._ma_at_last_crossover,
-                )
-                signal = "bull" if new_state == "above" else "bear"
-                self._log_crossover(
-                    signal=signal, rsi14=rsi14, ma9=ma9,
-                    distance=current_distance, trade_taken=False,
-                    reason=f"Distance {current_distance:.2f} < required {min_distance:.1f}",
-                )
-                return
+        # ── Highest distance ≥ threshold → attempt trade ──────────────
+        spread_type = "Put Credit" if signal == "bull" else "Call Credit"
 
-        # ── Crossover detected & distance confirmed ────────────────────
-        if new_state == "above":
-            # Check for existing put credit spread
-            if self._has_open_spread("Put Credit"):
-                self.log.info(
-                    "🟢 BULL crossover | RSI14=%.2f above MA9=%.2f — put credit spread already open, skipping",
-                    rsi14, ma9,
-                )
-                self._rsi_cross_traded = True
-                self._rsi_at_last_crossover = rsi14
-                self._ma_at_last_crossover = ma9
-                self._log_crossover(
-                    signal="bull", rsi14=rsi14, ma9=ma9,
-                    distance=abs(rsi14 - ma9), trade_taken=False,
-                    reason="Put Credit spread already open",
-                )
-                return
-
+        if self._has_open_spread(spread_type):
             self.log.info(
-                "🟢 BULL crossover | RSI14=%.2f crossed above MA9=%.2f (distance=%.2f) — opening put credit spread",
-                rsi14, ma9, abs(rsi14 - ma9),
+                "%s crossover — %s spread already open, skipping trade",
+                signal.upper(), spread_type,
             )
-            trade_ok = False
-            try:
+            self._log_crossover(
+                signal=signal, rsi14=rsi14, ma9=ma9,
+                distance=current_distance, highest_distance=highest,
+                trade_taken=False,
+                reason=f"{spread_type} spread already open",
+            )
+            self._highest_distance = current_distance
+            return
+
+        trade_ok = False
+        try:
+            if signal == "bull":
                 self._trader.open_put_credit_spread()
-                self._rsi_cross_traded = True
-                trade_ok = True
-            except Exception as exc:
-                self.log.error("Failed to open put credit spread on bull crossover: %s", exc)
-            finally:
-                self._rsi_at_last_crossover = rsi14
-                self._ma_at_last_crossover = ma9
-                self._log_crossover(
-                    signal="bull", rsi14=rsi14, ma9=ma9,
-                    distance=abs(rsi14 - ma9), trade_taken=trade_ok,
-                    trade_detail="Put Credit Spread" if trade_ok else None,
-                    reason=None if trade_ok else "Trade execution failed",
-                )
-        else:
-            # Check for existing call credit spread
-            if self._has_open_spread("Call Credit"):
-                self.log.info(
-                    "🔴 BEAR crossover | RSI14=%.2f below MA9=%.2f — call credit spread already open, skipping",
-                    rsi14, ma9,
-                )
-                self._rsi_cross_traded = True
-                self._rsi_at_last_crossover = rsi14
-                self._ma_at_last_crossover = ma9
-                self._log_crossover(
-                    signal="bear", rsi14=rsi14, ma9=ma9,
-                    distance=abs(rsi14 - ma9), trade_taken=False,
-                    reason="Call Credit spread already open",
-                )
-                return
-
-            self.log.info(
-                "🔴 BEAR crossover | RSI14=%.2f crossed below MA9=%.2f (distance=%.2f) — opening call credit spread",
-                rsi14, ma9, abs(rsi14 - ma9),
-            )
-            trade_ok = False
-            try:
+            else:
                 self._trader.open_call_credit_spread()
-                self._rsi_cross_traded = True
-                trade_ok = True
-            except Exception as exc:
-                self.log.error("Failed to open call credit spread on bear crossover: %s", exc)
-            finally:
-                self._rsi_at_last_crossover = rsi14
-                self._ma_at_last_crossover = ma9
-                self._log_crossover(
-                    signal="bear", rsi14=rsi14, ma9=ma9,
-                    distance=abs(rsi14 - ma9), trade_taken=trade_ok,
-                    trade_detail="Call Credit Spread" if trade_ok else None,
-                    reason=None if trade_ok else "Trade execution failed",
-                )
+            trade_ok = True
+        except Exception as exc:
+            self.log.error("Failed to open %s spread on %s crossover: %s", spread_type, signal, exc)
+        finally:
+            self._log_crossover(
+                signal=signal, rsi14=rsi14, ma9=ma9,
+                distance=current_distance, highest_distance=highest,
+                trade_taken=trade_ok,
+                trade_detail=f"{spread_type} Spread" if trade_ok else None,
+                reason=None if trade_ok else "Trade execution failed",
+            )
+            # Reset highest distance for next segment
+            self._highest_distance = current_distance
 
     # ──────────────────────────────────────────────────────────
     # Crossover log persistence
@@ -961,21 +933,27 @@ class SPXStreamer:
         except Exception as exc:
             self.log.warning("Failed to reset crossover log: %s", exc)
         self._crossover_log_date = today
+        # Reset crossover tracking state for the new day
+        self._rsi_cross_state = None
+        self._highest_distance = 0.0
+        self._market_open_logged = False
 
     def _log_crossover(self, signal: str, rsi14: float, ma9: float,
-                       distance: float, trade_taken: bool,
+                       distance: float, highest_distance: float,
+                       trade_taken: bool,
                        trade_detail: Optional[str] = None,
                        reason: Optional[str] = None) -> None:
         """Append a crossover event to cross_over.json.
 
         Args:
-            signal:       "bull" or "bear"
-            rsi14:        RSI 14 value at the crossover
-            ma9:          MA 9 value at the crossover
-            distance:     abs(RSI14 - MA9) at the crossover
-            trade_taken:  whether a trade was executed
-            trade_detail: description of the trade (e.g. "Put Credit Spread")
-            reason:       why trade was skipped if not taken
+            signal:            "open", "bull", or "bear"
+            rsi14:             RSI 14 value at the event
+            ma9:               MA 9 value at the event
+            distance:          abs(RSI14 - MA9) at the event
+            highest_distance:  highest distance since open / last crossover
+            trade_taken:       whether a trade was executed
+            trade_detail:      description of the trade (e.g. "Put Credit Spread")
+            reason:            why trade was skipped if not taken
         """
         import datetime as _dt
         est = _dt.timezone(_dt.timedelta(hours=-5), "EST")
@@ -995,6 +973,7 @@ class SPXStreamer:
             "rsi_14": round(rsi14, 2),
             "ma_9": round(ma9, 2),
             "crossover_distance": round(distance, 2),
+            "highest_distance": round(highest_distance, 2),
             "trade_taken": trade_taken,
             "trade": trade_detail,
             "reason": reason,
