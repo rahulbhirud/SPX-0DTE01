@@ -17,9 +17,11 @@ print(f"  MA Period: {cfg.rsi_ma_period}")
 print(f"  Overbought: {cfg.rsi_overbought}")
 print(f"  Oversold: {cfg.rsi_oversold}")
 print(f"  Min Crossover Distance: {cfg.rsi_min_crossover_distance}")
+print(f"  Min Crossover Threshold: {cfg.rsi_min_crossover_threshold}")
 
 assert cfg.rsi_period == 14, "RSI period should be 14"
 assert cfg.rsi_ma_period == 9, "RSI MA period should be 9"
 assert cfg.rsi_min_crossover_distance == 8.0, "Min crossover distance should be 8.0"
+assert cfg.rsi_min_crossover_threshold == 1.5, "Min crossover threshold should be 1.5"
 
 print("\n✅ All config values loaded correctly!")

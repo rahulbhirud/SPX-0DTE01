@@ -149,6 +149,16 @@ class Config:
         """Minimum distance RSI14 and MA9 must move apart since last crossover."""
         return float(self._raw.get("rsi", {}).get("min_crossover_distance", 8.0))
 
+    @property
+    def rsi_min_crossover_threshold(self) -> float:
+        """Hysteresis buffer for crossover detection.
+
+        RSI must cross MA by at least this many points before the
+        crossover state flips (prevents noise when the two lines
+        are nearly equal).
+        """
+        return float(self._raw.get("rsi", {}).get("min_crossover_threshold", 1.5))
+
     # ── Options Chain Scheduler ───────────────────────────────
 
     @property
@@ -759,11 +769,14 @@ class SPXStreamer:
         Logic:
         1. On every tick update ``_highest_distance`` (max distance since open / last crossover).
         2. At market open log a baseline entry to cross_over.json (once per day).
-        3. On crossover: if ``_highest_distance`` ≥ ``min_crossover_distance`` → trade;
+        3. **Hysteresis**: RSI must cross MA by at least ``min_crossover_threshold``
+           before the state flips.  This eliminates false crossovers when the two
+           lines are nearly equal (+/- tiny oscillations).
+        4. On crossover: if ``_highest_distance`` ≥ ``min_crossover_distance`` → trade;
            otherwise log only.  Reset ``_highest_distance`` after every crossover.
-        4. Checks ``PositionTracker`` — skips trade if a spread of the same type
+        5. Checks ``PositionTracker`` — skips trade if a spread of the same type
            is already open.
-        5. Auto-trading time window guard (``auto_trading.start_time`` / ``end_time``).
+        6. Auto-trading time window guard (``auto_trading.start_time`` / ``end_time``).
         """
         import datetime as _dt
 
@@ -820,22 +833,29 @@ class SPXStreamer:
             )
             return
 
-        # ── Determine current RSI vs MA relationship ───────────────────
-        if rsi14 > ma9:
+        # ── Determine current RSI vs MA relationship (with hysteresis) ─
+        threshold = self.cfg.rsi_min_crossover_threshold
+        prev_state = self._rsi_cross_state
+
+        # Apply hysteresis: require RSI to cross MA by at least
+        # `threshold` points before flipping the state.  This
+        # prevents rapid flip-flopping from tiny oscillations
+        # when the two lines are nearly equal.
+        if rsi14 >= ma9 + threshold:
             new_state = "above"
-        elif rsi14 < ma9:
+        elif rsi14 <= ma9 - threshold:
             new_state = "below"
         else:
-            return  # exactly equal — no signal
+            # Inside the dead-zone — keep previous state (no signal)
+            return
 
-        prev_state = self._rsi_cross_state
         self._rsi_cross_state = new_state
 
         # First reading — establish baseline, don't trade
         if prev_state is None:
             self.log.info(
-                "RSI crossover baseline | RSI14=%.2f  MA9=%.2f  state=%s",
-                rsi14, ma9, new_state,
+                "RSI crossover baseline | RSI14=%.2f  MA9=%.2f  state=%s  (threshold=%.1f)",
+                rsi14, ma9, new_state, threshold,
             )
             return
 

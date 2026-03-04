@@ -71,13 +71,21 @@ rsi:
   # Prevents whipsaw trades from small oscillations.
   min_crossover_distance: 8.0
 
+  # ── Crossover Detection Hysteresis ────────────────────────
+  # RSI must cross MA by at least this many points before a
+  # crossover state change is recognised.  Prevents rapid
+  # flip-flopping when RSI and MA are nearly equal.
+  # Example: with threshold 1.5, if state is "above", RSI must
+  # drop to MA − 1.5 before switching to "below" (and vice-versa).
+  min_crossover_threshold: 1.5
+
 # ============================================================
 # Auto Trading Guard Rails
 # ============================================================
 # Controls when the system is allowed to auto-open trades via
 # RSI crossover signals. Times are in US/Eastern (EST/EDT).
 auto_trading:
-  enabled: false                 # Master switch for auto trading
+  enabled:                  # Master switch for auto trading
   start_time: "09:30"            # Earliest time to place auto trades (HH:MM, EST)
   end_time: "15:00"              # Latest time to place auto trades (HH:MM, EST)
 
