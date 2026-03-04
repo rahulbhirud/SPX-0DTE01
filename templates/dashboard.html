@@ -973,14 +973,21 @@
                 labels: {
                     show: true,
                     datetimeUTC: true,  /* our epoch values are already UTC-adjusted */
-                    format: 'HH:mm',
                     style: { colors: '#8b8fa3', fontSize: '10px' },
                     rotate: 0,
-                    rotateAlways: false
+                    rotateAlways: false,
+                    formatter: function(val) {
+                        const d = new Date(val);
+                        let h = d.getUTCHours();
+                        const m = d.getUTCMinutes();
+                        if (h === 0) h = 12;
+                        else if (h > 12) h -= 12;
+                        return h + ':' + String(m).padStart(2, '0');
+                    }
                 },
                 axisBorder: { show: false },
                 axisTicks: { show: true, color: '#2a2d3a' },
-                tickAmount: 13  /* roughly every 30 min across 6.5 h */
+                tickAmount: 13  /* every 30 min across 6.5 h */
             },
             yaxis: {
                 min: 0, max: 100,
@@ -1008,7 +1015,14 @@
                 theme: 'dark',
                 x: {
                     show: true,
-                    format: 'HH:mm'
+                    formatter: function(val) {
+                        const d = new Date(val);
+                        let h = d.getUTCHours();
+                        const m = d.getUTCMinutes();
+                        if (h === 0) h = 12;
+                        else if (h > 12) h -= 12;
+                        return h + ':' + String(m).padStart(2, '0');
+                    }
                 },
                 y: { formatter: v => (v !== null && v !== undefined) ? v.toFixed(2) : '—' }
             }
