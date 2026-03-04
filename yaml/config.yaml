@@ -85,7 +85,7 @@ rsi:
 # Controls when the system is allowed to auto-open trades via
 # RSI crossover signals. Times are in US/Eastern (EST/EDT).
 auto_trading:
-  enabled:                  # Master switch for auto trading
+  enabled: true                 # Master switch for auto trading
   start_time: "09:30"            # Earliest time to place auto trades (HH:MM, EST)
   end_time: "15:00"              # Latest time to place auto trades (HH:MM, EST)
 
