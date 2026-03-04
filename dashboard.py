@@ -161,9 +161,14 @@ def api_crossover_log():
     filepath = os.path.join(STREAM_DATA_DIR, "cross_over.json")
     try:
         with open(filepath, "r") as f:
-            data = json.load(f)
+            raw = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        data = []
+        raw = []
+    # Support new format {"state": ..., "events": [...]} and legacy plain array
+    if isinstance(raw, dict):
+        data = raw.get("events", [])
+    else:
+        data = raw
     return jsonify(data)
 
 

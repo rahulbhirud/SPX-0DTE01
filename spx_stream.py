@@ -707,6 +707,9 @@ class SPXStreamer:
         # Crossover log: tracks the date the file was last reset
         self._crossover_log_date: Optional[str] = None
 
+        # ── Restore persisted crossover state from cross_over.json ────
+        self._load_crossover_state()
+
     # ──────────────────────────────────────────────────────────
     # Candle handler
     # ──────────────────────────────────────────────────────────
@@ -813,6 +816,7 @@ class SPXStreamer:
         # ── Update highest distance since open / last crossover ────────
         if current_distance > self._highest_distance:
             self._highest_distance = current_distance
+            self._save_crossover_state()
 
         # ── Time window guard (auto-trading) ───────────────────────────
         if not self.cfg.auto_trading_enabled:
@@ -928,8 +932,78 @@ class SPXStreamer:
             self._highest_distance = current_distance
 
     # ──────────────────────────────────────────────────────────
-    # Crossover log persistence
+    # Crossover state persistence
     # ──────────────────────────────────────────────────────────
+
+    def _read_crossover_file(self) -> dict:
+        """Read cross_over.json and return the top-level dict.
+
+        Expected format::
+
+            {
+              "state": {"rsi_cross_state": ..., "highest_distance": ..., "market_open_logged": ...},
+              "events": [ ... ]
+            }
+
+        Handles the legacy plain-array format by migrating it on read.
+        """
+        if not os.path.exists(self._CROSSOVER_FILE):
+            return {"state": {}, "events": []}
+        try:
+            with open(self._CROSSOVER_FILE, "r") as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {"state": {}, "events": []}
+
+        # Migrate legacy format: plain array → {state, events}
+        if isinstance(raw, list):
+            return {"state": {}, "events": raw}
+        if not isinstance(raw, dict):
+            return {"state": {}, "events": []}
+        raw.setdefault("state", {})
+        raw.setdefault("events", [])
+        return raw
+
+    def _write_crossover_file(self, data: dict) -> None:
+        """Atomically write the full cross_over.json structure."""
+        os.makedirs(self._STREAM_DATA_DIR, exist_ok=True)
+        try:
+            tmp = self._CROSSOVER_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, self._CROSSOVER_FILE)
+        except Exception as exc:
+            self.log.warning("Failed to write crossover file: %s", exc)
+
+    def _load_crossover_state(self) -> None:
+        """Restore crossover tracking state from cross_over.json on startup."""
+        data = self._read_crossover_file()
+        state = data.get("state", {})
+        if not state:
+            self.log.info("No persisted crossover state found — starting fresh.")
+            return
+
+        self._rsi_cross_state = state.get("rsi_cross_state")
+        self._highest_distance = float(state.get("highest_distance", 0.0))
+        self._market_open_logged = bool(state.get("market_open_logged", False))
+        self._crossover_log_date = state.get("crossover_log_date")
+        self.log.info(
+            "Restored crossover state | cross_state=%s  highest_distance=%.2f  "
+            "market_open_logged=%s  log_date=%s",
+            self._rsi_cross_state, self._highest_distance,
+            self._market_open_logged, self._crossover_log_date,
+        )
+
+    def _save_crossover_state(self) -> None:
+        """Persist current crossover tracking state into cross_over.json."""
+        data = self._read_crossover_file()
+        data["state"] = {
+            "rsi_cross_state": self._rsi_cross_state,
+            "highest_distance": round(self._highest_distance, 4),
+            "market_open_logged": self._market_open_logged,
+            "crossover_log_date": self._crossover_log_date,
+        }
+        self._write_crossover_file(data)
 
     def _reset_crossover_log_if_new_day(self) -> None:
         """Reset cross_over.json at 9:00 AM EST each trading day."""
@@ -942,21 +1016,15 @@ class SPXStreamer:
             return
         if now.time() < _dt.time(9, 0):
             return
-        # New day — overwrite with empty array
-        os.makedirs(self._STREAM_DATA_DIR, exist_ok=True)
-        try:
-            tmp = self._CROSSOVER_FILE + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump([], f)
-            os.replace(tmp, self._CROSSOVER_FILE)
-            self.log.info("Crossover log reset for %s", today)
-        except Exception as exc:
-            self.log.warning("Failed to reset crossover log: %s", exc)
+        # New day — overwrite with fresh structure
+        self._write_crossover_file({"state": {}, "events": []})
+        self.log.info("Crossover log reset for %s", today)
         self._crossover_log_date = today
         # Reset crossover tracking state for the new day
         self._rsi_cross_state = None
         self._highest_distance = 0.0
         self._market_open_logged = False
+        self._save_crossover_state()
 
     def _log_crossover(self, signal: str, rsi14: float, ma9: float,
                        distance: float, highest_distance: float,
@@ -999,25 +1067,16 @@ class SPXStreamer:
             "reason": reason,
         }
 
-        os.makedirs(self._STREAM_DATA_DIR, exist_ok=True)
-        try:
-            if os.path.exists(self._CROSSOVER_FILE):
-                with open(self._CROSSOVER_FILE, "r") as f:
-                    data = json.load(f)
-            else:
-                data = []
-        except (json.JSONDecodeError, IOError):
-            data = []
-
-        data.append(entry)
-
-        try:
-            tmp = self._CROSSOVER_FILE + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp, self._CROSSOVER_FILE)
-        except Exception as exc:
-            self.log.warning("Failed to write crossover log: %s", exc)
+        data = self._read_crossover_file()
+        data["events"].append(entry)
+        # Also persist current tracking state alongside the events
+        data["state"] = {
+            "rsi_cross_state": self._rsi_cross_state,
+            "highest_distance": round(self._highest_distance, 4),
+            "market_open_logged": self._market_open_logged,
+            "crossover_log_date": self._crossover_log_date,
+        }
+        self._write_crossover_file(data)
 
     # ──────────────────────────────────────────────────────────
     # Market-hours helper
